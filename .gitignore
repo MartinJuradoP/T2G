@@ -1,0 +1,138 @@
+# -------------------------------------------------------------
+# 🐍 Python básico
+# -------------------------------------------------------------
+__pycache__/
+*.py[cod]
+*$py.class
+
+# Extensiones C
+*.so
+
+# Distribución / empaquetado
+.Python
+build/
+dist/
+develop-eggs/
+downloads/
+eggs/
+.eggs/
+lib/
+lib64/
+parts/
+sdist/
+wheels/
+pip-wheel-metadata/
+share/python-wheels/
+MANIFEST
+
+# Entornos virtuales
+venv/
+.venv/
+env/
+ENV/
+.python-version
+
+# Instaladores / logs
+pip-log.txt
+pip-delete-this-directory.txt
+
+# PyInstaller
+*.spec
+
+# Tests / cobertura
+htmlcov/
+.tox/
+.nox/
+.coverage
+.coverage.*
+.cache
+nosetests.xml
+coverage.xml
+*.cover
+*.py,cover
+.pytest_cache/
+hypothesis/
+.hypothesis/
+cover/
+
+# Tipado / análisis estático
+.mypy_cache/
+.dmypy.json
+pyrightconfig.json
+.pyre/
+.pytype/
+.ruff_cache/
+.pylint.d/
+
+# -------------------------------------------------------------
+# 🗒️ Jupyter / Notebooks
+# -------------------------------------------------------------
+.ipynb_checkpoints/
+
+# (Opcional) ignora notebooks generados temporalmente:
+# *_checkpoint.ipynb
+
+# -------------------------------------------------------------
+# 🧰 Editores / OS
+# -------------------------------------------------------------
+# macOS
+.DS_Store
+.AppleDouble
+.LSOverride
+Icon?
+.Spotlight-V100
+.Trashes
+
+# Windows
+Thumbs.db
+ehthumbs.db
+Desktop.ini
+
+# IDEs
+.vscode/
+.idea/
+*.code-workspace
+.ropeproject/
+
+# Direnv / env locales
+.env
+.env.*
+!.env.example
+.envrc
+
+# Logs genéricos
+logs/
+*.log
+
+# -------------------------------------------------------------
+# 📦 Proyecto T2G (salidas del pipeline)
+# -------------------------------------------------------------
+# Salidas generadas: IR y Chunks
+outputs_ir/
+outputs_chunks/
+outputs_sentences/
+# Artefactos temporales
+tmp/
+.tmp/
+**/__temp__/
+**/.cache/
+
+# -------------------------------------------------------------
+# 📄 Pipelines YAML
+# -------------------------------------------------------------
+# Mantén pipeline.yaml versionado, ignora variantes locales
+pipelines/**/*.local.yaml
+pipelines/*.local.yaml
+# (Descomenta si generas YAMLs automáticos y no quieres versionarlos)
+# pipelines/generated/
+# pipelines/*.generated.yaml
+
+# -------------------------------------------------------------
+# 📁 Datos / docs (ajusta según tu política)
+# -------------------------------------------------------------
+# 📁 Docs (ignora todo menos README y ejemplos)
+docs/**
+!docs/README.md
+!docs/.gitkeep
+!docs/samples/**
+

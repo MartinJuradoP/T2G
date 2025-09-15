@@ -1,0 +1,47 @@
+# pipelines/pipeline.yaml
+# Pipeline declarativo T2G — encadena etapas sin tocar código.
+# Puedes duplicar/editar este archivo para distintos flujos.
+
+pipeline:
+  # Meta-opciones del runner
+  dry_run: false            # true = no ejecuta, solo imprime qué haría
+  continue_on_error: true   # si una etapa falla, continúa con la siguiente
+
+stages:
+  # 1) Parsear documentos a IR
+  - name: parse
+    args:
+      # Puedes usar inputs directos o patrones glob
+      clean_outdir: true
+      inputs_glob:
+        - "docs/*.pdf"
+        - "docs/*.png"
+        - "docs/*.jpg"
+      outdir: "outputs_ir"
+
+  # 2) Chunkear todas las IR generadas
+  - name: chunk
+    args:
+      ir_glob: "outputs_ir/*.json"
+      outdir: "outputs_chunks"
+      target_chars: 1400
+      max_chars: 2048
+      min_chars: 400
+      overlap: 120
+      table_policy: "isolate"           # isolate | merge
+      sentence_splitter: "auto"         # auto | spacy | regex
+  # 3) Oraciones y su contexto
+  - name: sentences
+    args:
+      chunks_glob: "outputs_chunks/*.json"
+      outdir: "outputs_sentences"
+      sentence_splitter: "auto"     # "spacy" si instalaste el modelo
+      min_chars: 25
+      dedupe: "fuzzy"               # none | exact | fuzzy
+      fuzzy_threshold: 0.92
+      # toggles (dejar en false para aplicar normalización/filtros)
+      no_normalize_whitespace: false
+      no_dehyphenate: false
+      no_strip_bullets: false
+      keep_stopword_only: false
+      keep_numeric_only: false
