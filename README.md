@@ -1,7 +1,3 @@
-¡total! aquí tienes tu **README** con **la misma secuencia** que compartiste, agregando **la etapa de Triples** (CLI, YAML, contratos y métricas), y actualizando estructura/salidas.
-
----
-
 # 📚 Proyecto T2G — Knowledge Graph a partir de Documentos
 
 **T2G** es una *pipeline modular* para convertir documentos heterogéneos (PDF, DOCX, imágenes) en una **Representación Intermedia (IR) homogénea**, segmentarlos en **chunks** semánticos, luego en **oraciones filtradas**, y finalmente extraer **triples (S,R,O)** listos para RAG/IE/grafos.
