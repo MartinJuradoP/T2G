@@ -7,18 +7,21 @@ Subcomandos:
 - parse           Parser → DocumentIR(.json)
 - chunk           DocumentIR(.json) → DocumentChunks(.json)
 - sentences       DocumentChunks(.json) → DocumentSentences(.json)
+- triples         DocumentSentences(.json) → DocumentTriples(.json)
 - pipeline        Ejecuta parse + chunk en una sola corrida (imperativo)
 - pipeline-yaml   Ejecuta un pipeline declarativo desde YAML
 
 Requisitos:
-- Estructura de paquetes con __init__.py en parser/ y chunker/
+- Estructura de paquetes con __init__.py en parser/, chunker/, sentence_filter/, triples/
 - Ejecutar desde la raíz del repo:  python t2g_cli.py <subcomando> ...
 - Para pipeline-yaml: PyYAML (pip install pyyaml)
 
 Sugerencias:
-- Para cortes por oración con mejor calidad, instala spaCy y un modelo:
+- Para cortes por oración y dependencias con mejor calidad, instala spaCy y un modelo:
     pip install spacy
     python -m spacy download es_core_news_sm
+    # opcional inglés
+    python -m spacy download en_core_web_sm
 """
 
 from __future__ import annotations
@@ -27,7 +30,7 @@ import argparse
 import glob
 import json
 import os
-import shutil          # ← se usa en limpieza de carpetas en pipeline-yaml
+import shutil          # ← limpieza de carpetas en pipeline-yaml
 import tempfile
 from pathlib import Path
 from typing import Any, Callable, Dict, List
@@ -46,6 +49,11 @@ from chunker import HybridChunker, ChunkerConfig
 # Etapa 3: Sentence/Filter
 from sentence_filter.sentence_filter import SentenceFilter, SentenceFilterConfig
 from sentence_filter.schemas import DocumentSentences
+
+# Etapa 4: Triples (dependency-based)
+# - DepTripleConfig: configuración de reglas/idioma/spaCy
+# - run_on_file: utilidad para procesar un archivo de sentences y escribir triples
+from triples.dep_triples import DepTripleConfig, run_on_file
 
 
 # ============================================================================
@@ -113,12 +121,7 @@ def cmd_parse(args: argparse.Namespace) -> None:
     - Lee documentos heterogéneos (PDF/DOCX/IMG).
     - Emite una IR homogénea (DocumentIR) en JSON.
     """
-    parser = DocParser(
-        # Mapea flags si deseas exponerlos en el CLI:
-        # ocr_lang=args.ocr_lang,
-        # ocr_resolution=args.ocr_dpi,
-        # enable_pdf_ocr_fallback=not args.no_pdf_ocr_fallback,
-    )
+    parser = DocParser()
     outdir = Path(args.outdir)
     outdir.mkdir(parents=True, exist_ok=True)
 
@@ -240,6 +243,77 @@ def cmd_sentences(args: argparse.Namespace) -> None:
         print(f"[SENTENCES OK] {p} → {out_path}  (#sents={kept}, keep_rate={keep_rate:.2f})")
 
 
+
+
+# ============================================================================
+# SUBCOMANDO: TRIPLES
+# ============================================================================
+
+def cmd_triples(args: argparse.Namespace) -> None:
+    """
+    DocumentSentences(.json) → DocumentTriples(.json)
+    - Extrae (S,R,O) con spaCy opcional + regex fallback.
+    - Imprime 1 línea por archivo + resumen final.
+    """
+    from json import JSONDecodeError
+    from triples.dep_triples import DepTripleExtractor, DepTripleConfig
+    from sentence_filter.schemas import DocumentSentences as _DS  # contrato de entrada
+
+    outdir = Path(args.outdir)
+    outdir.mkdir(parents=True, exist_ok=True)
+
+    use_spacy = None if args.spacy == "auto" else (True if args.spacy == "force" else False)
+    cfg = DepTripleConfig(
+        use_spacy=use_spacy,
+        lang_pref=str(args.lang or "auto"),
+        ruleset=str(args.ruleset or "default-bilingual"),
+        max_triples_per_sentence=int(args.max_triples_per_sentence or 4),
+        drop_pronoun_subjects=not bool(getattr(args, "keep_pronouns", False)),
+        enable_ner=bool(getattr(args, "enable_ner", False)),
+        canonicalize_relations=not bool(getattr(args, "no_canonicalize_relations", False)),
+        min_conf_keep=args.min_conf_keep,
+    )
+    extractor = DepTripleExtractor(cfg)
+
+    processed = 0
+    for spath in args.sent_files:
+        p = Path(spath)
+        if p.suffix.lower() != ".json":
+            print(f"[TRIPLES SKIP] {p} (no .json)")
+            continue
+        try:
+            data = json.loads(p.read_text(encoding="utf-8"))
+        except JSONDecodeError as e:
+            print(f"[TRIPLES ERR] {p}: JSON inválido ({e})")
+            continue
+
+        # Validación suave a DocumentSentences
+        try:
+            ds = _DS(**data)
+        except Exception as e:
+            # intenta rescatar doc_id/sentences si vienen como dict llano
+            try:
+                ds = _DS.model_validate({
+                    "doc_id": data.get("doc_id", "DOC-UNKNOWN"),
+                    "sentences": data.get("sentences", []),
+                    "meta": data.get("meta", {}),
+                })
+            except Exception as e2:
+                print(f"[TRIPLES ERR] {p}: DocumentSentences inválido ({e2})")
+                continue
+
+        # Extraer y escribir
+        dt = extractor.extract_document(ds)
+        out_path = outdir / f"{ds.doc_id}_triples.json"
+        _write_json(out_path, dt)
+
+        c = dt.meta.get("counters", {})
+        print(f"[TRIPLES OK] {p} → {out_path}  (#triples={len(dt.triples)}, used_sents={c.get('used_sents', 0)})")
+        processed += 1
+
+    print(f"[TRIPLES OK] archivos={processed} → {outdir}")
+
+
 # ============================================================================
 # SUBCOMANDO: PIPELINE (imperativo, parse+chunk)
 # ============================================================================
@@ -296,8 +370,8 @@ def cmd_pipeline_yaml(args: argparse.Namespace) -> None:
     Estructura esperada del YAML:
     ---
     pipeline:
-      dry_run: false            # si true, imprime lo que haría y no ejecuta
-      continue_on_error: true   # si una etapa falla, continuar con las siguientes
+      dry_run: false
+      continue_on_error: true
 
     stages:
       - name: parse
@@ -306,6 +380,8 @@ def cmd_pipeline_yaml(args: argparse.Namespace) -> None:
           inputs_glob:
             - "docs/*.pdf"
             - "docs/*.png"
+            - "docs/*.jpg"
+            - "docs/*.docx"
           outdir: "outputs_ir"
 
       - name: chunk
@@ -321,7 +397,7 @@ def cmd_pipeline_yaml(args: argparse.Namespace) -> None:
 
       - name: sentences
         args:
-          chunks_glob: "outputs_chunks/*.json"
+          chunks_glob: "outputs_chunks/*_chunks.json"
           outdir: "outputs_sentences"
           sentence_splitter: "auto"
           min_chars: 25
@@ -333,6 +409,17 @@ def cmd_pipeline_yaml(args: argparse.Namespace) -> None:
           no_strip_bullets: false
           keep_stopword_only: false
           keep_numeric_only: false
+
+      - name: triples
+        args:
+          sents_glob: "outputs_sentences/*_sentences.json"
+          outdir: "outputs_triples"
+          lang: "auto"                 # auto | es | en
+          ruleset: "default-es"
+          spacy: "auto"                # auto | force | off
+          max_triples_per_sentence: 4
+          # keep_pronouns: false
+          continue_on_error: true
     """
     if yaml is None:
         raise RuntimeError("PyYAML no está instalado. Ejecuta: pip install pyyaml")
@@ -353,11 +440,10 @@ def cmd_pipeline_yaml(args: argparse.Namespace) -> None:
     stage_registry: Dict[str, Callable[[Dict[str, Any]], None]] = {}
 
     def run_parse(stage_args: Dict[str, Any]) -> None:
-        # 1) Entradas
         inputs = _expand_inputs(stage_args, "inputs_glob", "inputs")
         outdir = stage_args.get("outdir", "outputs_ir")
 
-        # 2) Limpieza opcional del outdir
+        # Limpieza opcional del outdir
         if stage_args.get("clean_outdir"):
             if dry_run:
                 print(f"[DRY RUN] parse  (limpieza) outdir={outdir}")
@@ -374,12 +460,9 @@ def cmd_pipeline_yaml(args: argparse.Namespace) -> None:
                         except Exception as e:
                             print(f"[parse] aviso: no se pudo eliminar {p}: {e}")
 
-        # 3) Dry run
         if dry_run:
             print(f"[DRY RUN] parse  inputs={len(inputs)} → outdir={outdir}")
             return
-
-        # 4) Validación y ejecución
         if not inputs:
             print("[parse] ⚠️ No hay inputs (inputs_glob/inputs vacíos). Saltando.")
             return
@@ -391,6 +474,22 @@ def cmd_pipeline_yaml(args: argparse.Namespace) -> None:
         ir_files = [p for p in ir_files if str(p).lower().endswith(".json")]
 
         outdir = stage_args.get("outdir", "outputs_chunks")
+        # Limpieza opcional
+        if stage_args.get("clean_outdir"):
+            if dry_run:
+                print(f"[DRY RUN] chunk  (limpieza) outdir={outdir}")
+            else:
+                p_out = Path(outdir)
+                if p_out.exists():
+                    print(f"[chunk] limpiando carpeta: {outdir}")
+                    for p in p_out.iterdir():
+                        try:
+                            if p.is_file():
+                                p.unlink()
+                            elif p.is_dir():
+                                shutil.rmtree(p)
+                        except Exception as e:
+                            print(f"[chunk] aviso: no se pudo eliminar {p}: {e}")
         ns = _ns(
             ir_files=ir_files,
             outdir=outdir,
@@ -414,6 +513,23 @@ def cmd_pipeline_yaml(args: argparse.Namespace) -> None:
         chunk_files = [p for p in chunk_files if str(p).lower().endswith(".json")]
 
         outdir = stage_args.get("outdir", "outputs_sentences")
+        # Limpieza opcional
+        if stage_args.get("clean_outdir"):
+            if dry_run:
+                print(f"[DRY RUN] Sentences  (limpieza) outdir={outdir}")
+            else:
+                p_out = Path(outdir)
+                if p_out.exists():
+                    print(f"[chunk] limpiando carpeta: {outdir}")
+                    for p in p_out.iterdir():
+                        try:
+                            if p.is_file():
+                                p.unlink()
+                            elif p.is_dir():
+                                shutil.rmtree(p)
+                        except Exception as e:
+                            print(f"[chunk] aviso: no se pudo eliminar {p}: {e}")
+        
         ns = _ns(
             chunk_files=chunk_files,
             outdir=outdir,
@@ -435,10 +551,67 @@ def cmd_pipeline_yaml(args: argparse.Namespace) -> None:
             return
         cmd_sentences(ns)
 
+    def run_triples(stage_args: Dict[str, Any]) -> None:
+        """
+        Runner de etapa para 'triples' (para pipeline-yaml).
+        Espera llaves como:
+          sents_glob, sent_files, outdir, lang, ruleset, spacy,
+          max_triples_per_sentence, keep_pronouns, continue_on_error
+        """
+        sent_files = _expand_inputs(stage_args, "sents_glob", "sent_files")
+        sent_files = [p for p in sent_files if str(p).lower().endswith(".json")]
+        outdir = stage_args.get("outdir", "outputs_triples")
+        # Limpieza opcional
+        if stage_args.get("clean_outdir"):
+            if dry_run:
+                print(f"[DRY RUN] Triples  (limpieza) outdir={outdir}")
+            else:
+                p_out = Path(outdir)
+                if p_out.exists():
+                    print(f"[chunk] limpiando carpeta: {outdir}")
+                    for p in p_out.iterdir():
+                        try:
+                            if p.is_file():
+                                p.unlink()
+                            elif p.is_dir():
+                                shutil.rmtree(p)
+                        except Exception as e:
+                            print(f"[chunk] aviso: no se pudo eliminar {p}: {e}")
+
+       
+        canonicalize_rel = bool(stage_args.get("canonicalize_relations", True))
+
+        # 2) Namespace para el subcomando `triples`
+        ns = _ns(
+            sent_files=sent_files,
+            outdir=outdir,
+            lang=str(stage_args.get("lang", "auto")),
+            ruleset=str(stage_args.get("ruleset", "default-bilingual")),  # recomendado
+            spacy=str(stage_args.get("spacy", "auto")),
+            max_triples_per_sentence=int(stage_args.get("max_triples_per_sentence", 4)),
+            keep_pronouns=bool(stage_args.get("keep_pronouns", False)),
+            enable_ner=bool(stage_args.get("enable_ner", False)),
+            # YAML usa 'canonicalize_relations', el CLI usa flag negativa:
+            no_canonicalize_relations=not canonicalize_rel,
+            min_conf_keep = stage_args.get("min_conf_keep", None),  # puede ser null/None o 0.66, etc.
+        )
+
+        # 3) Dry-run / validación
+        if dry_run:
+            print(f"[DRY RUN] triples  sents={len(sent_files)} → outdir={outdir}")
+            return
+        if not sent_files:
+            print("[triples] ⚠️ No hay sent_files (sents_glob/sent_files vacíos). Saltando.")
+            return
+
+        # 4) Ejecutar
+        cmd_triples(ns)
+
     # Registrar etapas disponibles
     stage_registry["parse"] = run_parse
     stage_registry["chunk"] = run_chunk
     stage_registry["sentences"] = run_sentences
+    stage_registry["triples"] = run_triples
 
     # Ejecutar en orden declarado
     for idx, stage in enumerate(stages_conf, start=1):
@@ -465,7 +638,7 @@ def cmd_pipeline_yaml(args: argparse.Namespace) -> None:
 def build_arg_parser() -> argparse.ArgumentParser:
     p = argparse.ArgumentParser(
         prog="t2g",
-        description="T2G Pipeline CLI — Parser + HybridChunker + Sentence/Filter + YAML runner",
+        description="T2G Pipeline CLI — Parser + HybridChunker + Sentence/Filter + Triples + YAML runner",
     )
     sub = p.add_subparsers(dest="cmd", required=True)
 
@@ -473,10 +646,6 @@ def build_arg_parser() -> argparse.ArgumentParser:
     sp = sub.add_parser("parse", help="Parsea documentos a IR JSON")
     sp.add_argument("inputs", nargs="+", help="Rutas de documentos (PDF/DOCX/IMG)")
     sp.add_argument("--outdir", default="outputs_ir", help="Carpeta de salida de IRs")
-    # (futuro) flags de OCR:
-    # sp.add_argument("--ocr-lang", default="spa", help="Idiomas OCR (tesseract)")
-    # sp.add_argument("--ocr-dpi", type=int, default=220, help="DPI para fallback OCR")
-    # sp.add_argument("--no-pdf-ocr-fallback", action="store_true", help="Deshabilita OCR fallback en PDF")
     sp.set_defaults(func=cmd_parse)
 
     # --- chunk ---
@@ -510,6 +679,27 @@ def build_arg_parser() -> argparse.ArgumentParser:
     ss.add_argument("--keep-stopword-only", action="store_true", help="NO descartar oraciones de solo stopwords")
     ss.add_argument("--keep-numeric-only", action="store_true", help="NO descartar oraciones sin letras")
     ss.set_defaults(func=cmd_sentences)
+
+    # --- triples ---
+    st = sub.add_parser("triples", help="Genera triples (S,R,O) desde Sentences (.json)")
+    st.add_argument("sent_files", nargs="+", help="Rutas de DocumentSentences JSON")
+    st.add_argument("--outdir", default="outputs_triples", help="Carpeta de salida de triples")
+    st.add_argument("--lang", default="auto", choices=["auto","es","en"], help="Preferencia de idioma")
+    st.add_argument("--ruleset", default="default-bilingual", help="Conjunto de reglas (placeholder)")
+    st.add_argument("--spacy", default="auto", choices=["auto","force","off"],
+                    help="Uso de spaCy: auto (si hay modelo), force (requerir), off (deshabilitar)")
+    st.add_argument("--max-triples-per-sentence", type=int, default=4)
+    st.add_argument("--keep-pronouns", action="store_true", help="No descartar sujetos pronominales")
+    st.add_argument("--continue-on-error", action="store_true", default=True)
+    st.add_argument("--enable-ner", action="store_true",
+                help="No deshabilitar NER en spaCy (puede ser más lento)")
+    st.add_argument("--no-canonicalize-relations", action="store_true",
+                help="Conserva la superficie original de la relación (sin mapear a forma canónica)")
+    st.add_argument("--min-conf-keep", type=float, default=None,
+                help="Descarta triples con conf < X (None desactiva; e.g., 0.66)")
+
+
+    st.set_defaults(func=cmd_triples)
 
     # --- pipeline (imperativo, parse+chunk) ---
     pp = sub.add_parser("pipeline", help="Parsea y chunquea en una corrida")

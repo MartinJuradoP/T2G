@@ -111,6 +111,7 @@ logs/
 outputs_ir/
 outputs_chunks/
 outputs_sentences/
+outputs_triples/
 # Artefactos temporales
 tmp/
 .tmp/

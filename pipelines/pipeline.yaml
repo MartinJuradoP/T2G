@@ -22,6 +22,7 @@ stages:
   # 2) Chunkear todas las IR generadas
   - name: chunk
     args:
+      clean_outdir: true
       ir_glob: "outputs_ir/*.json"
       outdir: "outputs_chunks"
       target_chars: 1400
@@ -33,6 +34,7 @@ stages:
   # 3) Oraciones y su contexto
   - name: sentences
     args:
+      clean_outdir: true
       chunks_glob: "outputs_chunks/*.json"
       outdir: "outputs_sentences"
       sentence_splitter: "auto"     # "spacy" si instalaste el modelo
@@ -45,3 +47,18 @@ stages:
       no_strip_bullets: false
       keep_stopword_only: false
       keep_numeric_only: false
+  # 4) Triplizar oraciones
+  - name: triples
+    args:
+      clean_outdir: true
+      sents_glob: "outputs_sentences/*_sentences.json"
+      outdir: "outputs_triples"
+      min_conf_keep: 0.66
+      lang: "auto"                  # auto | es | en
+      ruleset: "default-bilingual"
+      spacy: "auto"                 # auto | force | off
+      max_triples_per_sentence: 4
+      keep_pronouns: false
+      enable_ner: false             # true para dejar NER activo en spaCy
+      canonicalize_relations: true  # false para conservar 'es', 'trabaja_en', etc.
+      continue_on_error: true

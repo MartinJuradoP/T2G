@@ -10,3 +10,5 @@ pandas>=2.0
 spacy>=3.7.0 ; python_version >= "3.8"
 # Para español o inglés (instalar modelos por separado con: python -m spacy download es_core_news_sm)
 PyYAML>=6.0.1
+# para probar
+matplotlib>=3.7
