@@ -1,6 +1,10 @@
 # pipelines/pipeline.yaml
-# Pipeline declarativo T2G — encadena etapas sin tocar código.
-# Puedes duplicar/editar este archivo para distintos flujos.
+# -----------------------------------------------------------------------------
+# Pipeline declarativo T2G — Ejecuta la cadena de etapas sin tocar código.
+# - Puedes duplicar/editar este archivo para distintos flujos.
+# - El runner soporta estas etapas: parse, chunk, sentences, triples, mentions, ie
+# - Recomendado: usar 'ie' (orquestador) para evitar trabajo duplicado.
+# -----------------------------------------------------------------------------
 
 pipeline:
   # Meta-opciones del runner
@@ -8,18 +12,26 @@ pipeline:
   continue_on_error: true   # si una etapa falla, continúa con la siguiente
 
 stages:
-  # 1) Parsear documentos a IR
+  # ---------------------------------------------------------------------------
+  # 1) Parsear documentos a IR (JSON)
+  # - Acepta PDF/DOCX/PNG/JPG; agrega/quita globs según tus insumos reales.
+  # - 'clean_outdir: true' vacía outputs_ir antes de escribir (cuidado si no quieres borrar resultados previos).
+  # ---------------------------------------------------------------------------
   - name: parse
     args:
-      # Puedes usar inputs directos o patrones glob
       clean_outdir: true
       inputs_glob:
         - "docs/*.pdf"
+        - "docs/*.docx"   # ← habilita .docx si lo usas
         - "docs/*.png"
         - "docs/*.jpg"
       outdir: "outputs_ir"
 
+  # ---------------------------------------------------------------------------
   # 2) Chunkear todas las IR generadas
+  # - Crea chunks semánticos con tamaños estables y solapamiento.
+  # - 'sentence_splitter: auto' usa spaCy si está disponible; si no, fallback regex.
+  # ---------------------------------------------------------------------------
   - name: chunk
     args:
       clean_outdir: true
@@ -31,13 +43,18 @@ stages:
       overlap: 120
       table_policy: "isolate"           # isolate | merge
       sentence_splitter: "auto"         # auto | spacy | regex
-  # 3) Oraciones y su contexto
+
+  # ---------------------------------------------------------------------------
+  # 3) Generar oraciones y su trazabilidad a los chunks
+  # - Filtra ruido y duplica menos contenido → abarata IE (NER/RE/triples).
+  # - Mantén estos thresholds para dominio general; ajusta si tus docs son muy densos/telegráficos.
+  # ---------------------------------------------------------------------------
   - name: sentences
     args:
       clean_outdir: true
       chunks_glob: "outputs_chunks/*.json"
       outdir: "outputs_sentences"
-      sentence_splitter: "auto"     # "spacy" si instalaste el modelo
+      sentence_splitter: "auto"     # usa "spacy" si instalaste modelos
       min_chars: 25
       dedupe: "fuzzy"               # none | exact | fuzzy
       fuzzy_threshold: 0.92
@@ -47,18 +64,125 @@ stages:
       no_strip_bullets: false
       keep_stopword_only: false
       keep_numeric_only: false
-  # 4) Triplizar oraciones
-  - name: triples
+
+  # ---------------------------------------------------------------------------
+  # 4) IE (orquestador por documento) — RECOMENDADO
+  #    - Si NO existen triples de un doc: los calcula.
+  #    - Si YA existen: los reusa (no recalcula).
+  #    - Luego ejecuta 'mentions' (NER/RE) con boost usando esos triples.
+  #
+  #    Notas:
+  #    - Usa 'sents_glob' si ya corriste 'sentences' (como aquí).
+  #    - Alternativamente, comenta 'sentences' arriba y usa 'chunks_glob' aquí
+  #      para que 'ie' genere oraciones por ti (ver bloque ALT más abajo).
+  #    - 'clean_outdir_triples/mentions' controlan borrado previo.
+  #    - 'validate: true' corre tools/validate_ie.py al final (si existe).
+  # ---------------------------------------------------------------------------
+  - name: ie
     args:
-      clean_outdir: true
-      sents_glob: "outputs_sentences/*_sentences.json"
-      outdir: "outputs_triples"
-      min_conf_keep: 0.66
-      lang: "auto"                  # auto | es | en
-      ruleset: "default-bilingual"
-      spacy: "auto"                 # auto | force | off
-      max_triples_per_sentence: 4
-      keep_pronouns: false
-      enable_ner: false             # true para dejar NER activo en spaCy
-      canonicalize_relations: true  # false para conservar 'es', 'trabaja_en', etc.
-      continue_on_error: true
+      sents_glob: "outputs_sentences/*_sentences.json"   # ← Recomendado: reusar oraciones ya generadas
+      outdir_triples: "outputs_triples"
+      outdir_mentions: "outputs_mentions"
+
+      # Config común ES/EN, spaCy opcional
+      lang: "auto"                 # auto | es | en
+      spacy: "auto"                # auto | force | off
+
+      # Umbrales de confianza
+      min_conf_keep_triples: 0.66  # descarta triples muy débiles (regex genéricas)
+      min_conf_keep_mentions: 0.66 # descarta NER/RE débiles
+
+      # Control de densidad de relaciones en Mentions (NER/RE)
+      max_relations_per_sentence: 6
+
+      # Etiquetas canónicas ES/EN en Mentions
+      canonicalize_labels: true
+
+      # Boost (consenso Mentions <-> Triples)
+      boost_conf: 0.08             # suma a conf de la mención si hay evidencia en triples
+
+      # ML opcional (si tienes el modelo local instalado)
+      use_transformers: false       # true para habilitar clasificador RE local HF
+      #hf_rel_model_path: "hf_plugins/re_models/relation_mini"  # ejemplo
+      #hf_device: "cpu"             # o "cuda" si tienes GPU
+
+      # Paralelismo y validación final
+      workers: 4                    # procesa N documentos en paralelo
+      validate: true                # corre tools/validate_ie.py si está disponible
+
+      # Limpiezas (opcionales)
+      clean_outdir_triples: false
+      clean_outdir_mentions: true   # true para evitar mezclar resultados de corridas previas
+
+
+  # ====================== OPCIONES ALTERNATIVAS / AVANZADAS ==================
+  # Deja lo siguiente COMENTADO por defecto. Úsalo sólo cuando:
+  # - quieras inspeccionar métricas de TRIPLES antes de NER/RE, o
+  # - quieras iterar rápido sobre thresholds de MENTIONS sin recalc TRIPLES, o
+  # - no quieras usar el orquestador 'ie'.
+  # ===========================================================================
+  #
+  # 4A) Triples (independiente) — Úsalo si necesitas auditar/medir triples antes de Mentions.
+  #     En pipelines largos, deja 'ie' comentado y activa esta etapa + 'mentions' abajo.
+  #
+  # - name: triples
+  #   args:
+  #     clean_outdir: true
+  #     sents_glob: "outputs_sentences/*_sentences.json"
+  #     outdir: "outputs_triples"
+  #     min_conf_keep: 0.66
+  #     lang: "auto"                  # auto | es | en
+  #     ruleset: "default-bilingual"
+  #     spacy: "auto"                 # auto | force | off
+  #     max_triples_per_sentence: 4
+  #     keep_pronouns: false
+  #     enable_ner: false             # true: deja NER activo en spaCy (más lento)
+  #     canonicalize_relations: true  # false: conserva superficie ('es', 'trabaja_en', etc.)
+  #     continue_on_error: true
+
+  #
+  # 4B) Mentions (independiente) — Úsalo si ya tienes 'outputs_triples' y quieres iterar rápido
+  #     sobre thresholds/reglas de NER/RE SIN recalcular triples. Actívalo junto con 4A o con
+  #     un directorio de triples ya existente. Si usas 'ie', NO actives esto.
+  #
+  # - name: mentions
+  #   args:
+  #     clean_outdir: true
+  #     sent_glob: "outputs_sentences/*_sentences.json"   # ojo: para Mentions es 'sent_glob' (no 'sents_glob')
+  #     outdir: "outputs_mentions"
+  #     lang: "auto"
+  #     spacy: "auto"
+  #     min_conf_keep: 0.66
+  #     max_relations_per_sentence: 6
+  #     canonicalize_labels: true
+  #     # Reusar triples existentes para consenso/boost (no recalcula):
+  #     boost_from_triples: "outputs_triples/*_triples.json"
+  #     boost_conf: 0.05
+  #     # ML opcional (sólo si tienes modelos locales instalados)
+  #     use_transformers: false
+  #     # hf_rel_model_path: "hf_plugins/re_models/relation_mini"
+  #     # hf_device: "cpu"
+
+  # ---------------------------------------------------------------------------
+  # 4C) ALT de 'ie' (sin etapa 'sentences'):
+  #     Si prefieres que 'ie' genere oraciones a partir de chunks, comenta la
+  #     etapa 'sentences' arriba y activa este bloque en lugar del 4) 'ie' principal.
+  # ---------------------------------------------------------------------------
+  # - name: ie
+  #   args:
+  #     chunks_glob: "outputs_chunks/*_chunks.json"        # ← ie genera oraciones primero
+  #     outdir_sentences: "outputs_sentences"              # dónde escribirá las oraciones
+  #     outdir_triples: "outputs_triples"
+  #     outdir_mentions: "outputs_mentions"
+  #     lang: "auto"
+  #     spacy: "auto"
+  #     min_conf_keep_triples: 0.66
+  #     min_conf_keep_mentions: 0.66
+  #     max_relations_per_sentence: 6
+  #     canonicalize_labels: true
+  #     boost_conf: 0.05
+  #     use_transformers: false
+  #     workers: 4
+  #     validate: true
+  #     clean_outdir_triples: false
+  #     clean_outdir_mentions: true

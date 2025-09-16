@@ -112,6 +112,7 @@ outputs_ir/
 outputs_chunks/
 outputs_sentences/
 outputs_triples/
+outputs_mentions/
 # Artefactos temporales
 tmp/
 .tmp/

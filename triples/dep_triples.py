@@ -184,6 +184,10 @@ def _canonical_relation(surface: str, lang: str, cfg: DepTripleConfig) -> Tuple[
         "de": "of", "of": "of", "para": "for", "for": "for", "con": "with", "with": "with",
         # alias
         "alias": "alias",
+        # relaciones comunes
+        "miembro_de": "member_of", "member_of": "member_of",
+        "colaboración_con": "collaboration_with", "collaboration_with": "collaboration_with",
+        "autor_de": "author_of", "author_of": "author_of",
     }
     canonical = mapping.get(s, s)
     return (canonical, surface)
@@ -538,10 +542,10 @@ class DepTripleExtractor:
                         )
                     )
 
-        # C) Nominal con preposición (head NOUN -> prep -> pobj)
+       # C) Nominal con preposición (head NOUN/PROPN -> prep -> pobj)
         valid_preps = {"de", "en", "para", "con"} if lang == "es" else {"of", "in", "for", "with"}
         for token in doc:
-            if token.pos_ != "NOUN":
+            if token.pos_ not in {"NOUN", "PROPN"}:
                 continue
             preps = [c for c in token.children if c.dep_ == "prep" and c.lemma_ in valid_preps]
             for p in preps:
@@ -549,22 +553,37 @@ class DepTripleExtractor:
                 for obj in objs:
                     sbj_text = _strip_punct_edges(_norm(doc[token.left_edge.i : token.right_edge.i + 1].text, self.cfg))
                     obj_text = _strip_punct_edges(_norm(doc[obj.left_edge.i : obj.right_edge.i + 1].text, self.cfg))
-                    rel_surface = _strip_punct_edges(_norm(p.lemma_, self.cfg))
+
+                    head_lemma = token.lemma_.lower()
+                    prep_lemma = p.lemma_.lower()
+
+                    # Detecta nominales semánticos: miembro de, colaboración con, autor de
+                    if (head_lemma in {"miembro","member"}) and (prep_lemma in {"de","of"}):
+                        rel_surface = "member_of"
+                    elif (head_lemma in {"colaboración","colaboracion","collaboration"}) and (prep_lemma in {"con","with"}):
+                        rel_surface = "collaboration_with"
+                    elif (head_lemma in {"autor","author"}) and (prep_lemma in {"de","of"}):
+                        rel_surface = "author_of"
+                    else:
+                        # fallback a la preposición si no es uno de los semánticos
+                        rel_surface = _strip_punct_edges(_norm(p.lemma_, self.cfg))
+
                     rel_canon, rel_surf = _canonical_relation(rel_surface, lang, self.cfg)
                     if not self._valid_sro(sbj_text, rel_canon, obj_text):
                         continue
+
                     start = min(token.idx, p.idx, obj.idx)
                     end = max(token.idx + len(token.text), p.idx + len(p.text), obj.idx + len(obj.text))
                     triples.append(
                         self._make_triple(
                             doc_id, sentence_idx, sentence_id,
                             sbj_text, rel_canon, obj_text,
-                            dep_rule="NOUN_prep_pobj", conf=0.68, lang=lang,
+                            dep_rule="NOUN_prep_pobj", conf=0.70,  # puedes dejar 0.68 si prefieres
+                            lang=lang,
                             span=(start, min(end, self.cfg.max_span_chars)),
                             extra_meta={**(extra_meta or {}), "rel_surface": rel_surf},
                         )
                     )
-
         # D) Aposición endurecida (NOUN appos NOUN) → alias
         for token in doc:
             if token.dep_ == "appos" and token.head is not None:

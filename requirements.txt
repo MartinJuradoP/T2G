@@ -1,14 +1,27 @@
-pydantic>=2.5
-pdfplumber>=0.11
-python-docx>=1.1
-pytesseract>=0.3
-Pillow>=10.0
-opencv-python>=4.8
-jupyterlab>=4.0
-pandas>=2.0
-# chunker (opcional spacy)
-spacy>=3.7.0 ; python_version >= "3.8"
-# Para español o inglés (instalar modelos por separado con: python -m spacy download es_core_news_sm)
-PyYAML>=6.0.1
-# para probar
-matplotlib>=3.7
+# --- Compatibilidad base (evita el choque con módulos compilados para NumPy 1.x) ---
+numpy>=1.26,<2.0
+
+# --- Núcleo del proyecto ---
+pydantic>=2.7,<3
+pdfplumber>=0.11,<0.12
+python-docx>=1.1,<1.2
+pytesseract>=0.3,<0.4
+Pillow>=10.2,<11
+opencv-python>=4.9,<4.11
+pandas>=2.2,<2.3
+PyYAML>=6.0.1,<7
+matplotlib>=3.8,<3.10
+
+# --- NLP ---
+spacy>=3.7,<3.8   ; python_version >= "3.8"
+
+# --- Consola/UX (notebooks) ---
+jupyterlab>=4.1,<4.3
+ipykernel>=6.29,<7
+
+# --- Menciones (rendimiento / ML) ---
+pyahocorasick>=2.0,<3        # si falla compilar en tu Mac, comenta esta línea
+
+# --- HF para re-rank de relaciones (opcional pero incluido) ---
+transformers>=4.40,<4.45
+torch>=2.1,<2.2               # 2.1.x (CPU o MPS en Apple Silicon)
