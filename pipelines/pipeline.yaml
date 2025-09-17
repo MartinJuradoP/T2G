@@ -186,3 +186,22 @@ stages:
   #     validate: true
   #     clean_outdir_triples: false
   #     clean_outdir_mentions: true
+
+  
+  # ---------------------------------------------------------------------------
+  # 5) Normalize (Mentions -> Entities)
+  # - Toma los *_mentions.json y genera *_entities.json con entidades fusionadas,
+  #   valores canónicos (fechas ISO, dinero tipado, correos/URLs normalizados).
+  # - Esto asegura consistencia en el grafo y evita fragmentación.
+  # ---------------------------------------------------------------------------
+  - name: normalize
+    args:
+      clean_outdir: true
+      mentions_glob: "outputs_mentions/*_mentions.json"
+      outdir: "outputs_entities"
+      # Configuración de normalización
+      date_locale: "auto"         # auto | es | en
+      merge_threshold: 0.92       # similitud mínima para merge ORG/PERSON
+      min_conf_keep: 0.66         # descarta mentions débiles
+      canonicalize: true          # activa claves/labels canónicas
+      default_currency: "MXN"     # $ ambiguo → MXN

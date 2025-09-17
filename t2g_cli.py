@@ -10,6 +10,7 @@ Subcomandos:
 - triples          DocumentSentences(.json) → DocumentTriples(.json)
 - mentions         DocumentSentences(.json) → DocumentMentions(.json)
 - ie               Orquestador por doc: (triples si faltan) → mentions con boost
+- normalize        DocumentMentions(.json) → DocumentEntities(.json)
 - pipeline-yaml    Pipeline declarativo desde YAML
 
 Puntos clave:
@@ -55,6 +56,10 @@ from triples.dep_triples import DepTripleExtractor, DepTripleConfig
 
 # Mentions (NER/RE)
 from mentions.ner_re import NERREExtractor, MentionConfig
+
+# Normalizer (Mentions -> Entities)
+from normalizer import Normalizer, NormalizeConfig
+
 
 
 # ============================================================================
@@ -560,6 +565,81 @@ def cmd_ie(args: argparse.Namespace) -> None:
         except Exception as e:
             print(f"[IE] ⚠️ validate_ie.py error: {e}")
 
+# ============================================================================
+# SUBCOMANDO: NORMALIZE (Mentions -> Entities)
+# ============================================================================
+
+def cmd_normalize(args: argparse.Namespace) -> None:
+    """
+    DocumentMentions(.json) → DocumentEntities(.json)
+
+    - Lee cada *_mentions.json (dict compatible con Pydantic).
+    - Normaliza tipos (DATE/MONEY/EMAIL/URL/ORG/PERSON/...) y fusiona entidades por claves canónicas.
+    - Escribe *_entities.json con trazabilidad de mentions y counters.
+    """
+    outdir = Path(args.outdir)
+    outdir.mkdir(parents=True, exist_ok=True)
+
+    # Construye config del normalizador desde CLI
+    cfg = NormalizeConfig(
+        date_locale=args.date_locale,
+        merge_threshold=args.merge_threshold,
+        min_conf_keep=args.min_conf_keep,
+        canonicalize=args.canonicalize,
+        default_currency=args.default_currency,
+    )
+    normalizer = Normalizer(cfg)
+
+    mentions_paths = sorted(glob.glob(args.mentions_glob))
+    if not mentions_paths:
+        print(f"[NORMALIZE] ⚠️ No se encontraron archivos con glob: {args.mentions_glob}")
+        return
+
+    ok, err = 0, 0
+    for pth in mentions_paths:
+        p = Path(pth)
+        if p.suffix.lower() != ".json":
+            print(f"[NORMALIZE SKIP] {p} (no .json)")
+            continue
+
+        # Lee el JSON de mentions
+        try:
+            mdict = json.loads(p.read_text(encoding="utf-8"))
+        except Exception as e:
+            print(f"[NORMALIZE ERR] {p}: JSON inválido ({e})")
+            err += 1
+            continue
+
+        # Ejecuta la normalización y escribe salida
+        try:
+            de = normalizer.run(mdict)  # acepta dict con estructura de DocumentMentions
+            out_path = outdir / f"{de.doc_id}_entities.json"
+            _write_json(out_path, de)   # helper ya soporta Pydantic
+
+            # --- Acceso robusto a meta.counters (puede ser Pydantic o dict) ---
+            meta_obj = getattr(de, "meta", {})
+            if isinstance(meta_obj, dict):
+                counters = meta_obj.get("counters", {}) or {}
+            else:
+                # meta es EntitiesMeta -> usa atributos
+                counters = getattr(meta_obj, "counters", {}) or {}
+
+            # Números de resumen
+            n_entities = len(getattr(de, "entities", []))
+            input_mentions = counters.get("input_mentions", "?")
+            kept_protos    = counters.get("kept_protos", "?")
+
+            print(
+                f"[NORMALIZE OK] {p.name} → {out_path}  "
+                f"(#entities={n_entities}, input_mentions={input_mentions}, kept_protos={kept_protos})"
+            )
+            ok += 1
+
+        except Exception as ex:
+            print(f"[NORMALIZE ERR] {p}: {ex}")
+            err += 1
+
+    print(f"[NORMALIZE DONE] OK={ok} ERR={err} → {outdir}")
 
 # ============================================================================
 # SUBCOMANDO: PIPELINE-YAML (declarativo)
@@ -776,6 +856,40 @@ def cmd_pipeline_yaml(args: argparse.Namespace) -> None:
 
         cmd_ie(ns)
 
+    def run_normalize(stage_args: Dict[str, Any]) -> None:
+        """
+        Normaliza Mentions → Entities.
+        Args esperados:
+          - mentions_glob: glob de entradas (default: outputs_mentions/*_mentions.json)
+          - outdir: carpeta de salida (default: outputs_entities)
+          - date_locale: auto|es|en
+          - merge_threshold: float (default 0.92)
+          - min_conf_keep: float (default 0.66)
+          - canonicalize: bool (default True)
+          - default_currency: str (default MXN)
+        """
+        mentions_glob = stage_args.get("mentions_glob", "outputs_mentions/*_mentions.json")
+        outdir = stage_args.get("outdir", "outputs_entities")
+
+        if stage_args.get("clean_outdir"):
+            if dry_run: print(f"[DRY RUN] normalize (clean) outdir={outdir}")
+            else: _maybe_clean(outdir, "normalize")
+
+        ns = _ns(
+            mentions_glob=mentions_glob,
+            outdir=outdir,
+            date_locale=str(stage_args.get("date_locale", "auto")),
+            merge_threshold=float(stage_args.get("merge_threshold", 0.92)),
+            min_conf_keep=float(stage_args.get("min_conf_keep", 0.66)),
+            canonicalize=bool(stage_args.get("canonicalize", True)),
+            default_currency=str(stage_args.get("default_currency", "MXN")),
+        )
+        if dry_run:
+            print(f"[DRY RUN] normalize glob='{mentions_glob}' → outdir={outdir}")
+            return
+        cmd_normalize(ns)
+
+
     # Registrar etapas YAML
     stage_registry.update({
         "parse": run_parse,
@@ -784,6 +898,7 @@ def cmd_pipeline_yaml(args: argparse.Namespace) -> None:
         "triples": run_triples,
         "mentions": run_mentions,
         "ie": run_ie,
+        "normalize": run_normalize, 
     })
 
     # Ejecutar en orden
@@ -911,6 +1026,19 @@ def build_t2g_cli() -> argparse.ArgumentParser:
     ie_cmd.add_argument("--hf-batch-size", type=int, default=16)
     ie_cmd.add_argument("--hf-min-prob", type=float, default=0.55)
     ie_cmd.add_argument("--transformer-weight", type=float, default=0.30)
+
+    # --- normalize ---
+    norm_cmd = cmds.add_parser("normalize", help="Normaliza Mentions (.json) a Entities (.json)")
+    norm_cmd.add_argument("mentions_glob", help="Glob de DocumentMentions JSON (ej: outputs_mentions/*_mentions.json)")
+    norm_cmd.add_argument("--outdir", default="outputs_entities", help="Carpeta de salida para *_entities.json")
+    norm_cmd.add_argument("--date-locale", choices=["auto","es","en"], default="auto")
+    norm_cmd.add_argument("--merge-threshold", type=float, default=0.92)
+    norm_cmd.add_argument("--min-conf-keep", type=float, default=0.66)
+    norm_cmd.add_argument("--canonicalize", action=argparse.BooleanOptionalAction, default=True)
+    norm_cmd.add_argument("--default-currency", default="MXN")
+    norm_cmd.set_defaults(func=cmd_normalize)
+
+
     # Paralelismo / validación / limpieza
     ie_cmd.add_argument("--workers", type=int, default=4)
     ie_cmd.add_argument("--validate", action="store_true", default=False)

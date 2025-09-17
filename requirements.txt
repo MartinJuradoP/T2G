@@ -25,3 +25,5 @@ pyahocorasick>=2.0,<3        # si falla compilar en tu Mac, comenta esta línea
 # --- HF para re-rank de relaciones (opcional pero incluido) ---
 transformers>=4.40,<4.45
 torch>=2.1,<2.2               # 2.1.x (CPU o MPS en Apple Silicon)
+# -- Compara Strings ---
+rapidfuzz>=3.6,<4

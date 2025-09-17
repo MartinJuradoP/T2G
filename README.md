@@ -26,7 +26,7 @@
 |  3 | **Sentence/Filter**   | Dividir en **oraciones** y filtrar ruido antes de IE     | Chunks → **Sentences**                  | ✅      |
 |  4 | **Triples (dep.)**    | (S,R,O) ligeros ES/EN (spaCy + regex)                    | Sentences → **Triples**                 | ✅      |
 |  5 | **Mentions (NER/RE)** | Menciones de entidades/relaciones + consenso con Triples | Sentences → **Mentions**                | ✅      |
-|  6 | Normalización         | Fechas, montos, IDs, orgs                                | Mentions → Entidades                    | 🕒     |
+|  6 | **Normalización**     | Fechas, montos, IDs, orgs                                | Mentions → **Entidades**                | ✅      |
 |  7 | Publicación           | Índices / grafo 1-hop                                    | Chunks/Ent/Triples → ES/Qdrant/PG/Grafo | 🕒     |
 |  8 | Retriever (cascada)   | Recall → Precisión                                       | Query → Contexto                        | 🕒     |
 |  9 | Evaluación & HITL     | Calidad / drift / lazo humano                            | Respuestas → Scores                     | 🕒     |
@@ -37,8 +37,9 @@
 ## 📂 Estructura del proyecto
 
 ```
+```bash
 project_T2G/
-├── docs/                          # Documentos de prueba (PDF, DOCX, PNG, JPG)
+├── docs/                          # Documentos de prueba
 ├── parser/
 │   ├── parsers.py
 │   ├── metrics.py
@@ -56,25 +57,37 @@ project_T2G/
 ├── triples/
 │   ├── dep_triples.py
 │   ├── metrics.py
-│   └── schemas.py
-├── mentions/                      # NER/RE (con boost desde Triples y HF opcional)
-│   ├── ner_re.py
-│   ├── hf_plugins.py              # Wrapper HF local (opcional, offline)
 │   ├── schemas.py
 │   └── __init__.py
+├── mentions/
+│   ├── ner_re.py
+│   ├── hf_plugins.py
+│   ├── schemas.py
+│   └── __init__.py
+├── normalizer/                    
+│   ├── normalizer.py              
+│   ├── config.py                  
+│   ├── schemas.py                
+│   ├── merge.py                   
+│   ├── rules.py                  
+│   ├── utils.py                   
+│   ├── metrics.py                 
+│   └── __init__.py
 ├── tools/
-│   └── validate_ie.py             # Validación (Mentions soportadas por Triples)
+│   └── validate_ie.py
 ├── pipelines/
-│   └── pipeline.yaml              # Pipeline declarativo (YAML)
+│   └── pipeline.yaml
 ├── outputs_ir/
 ├── outputs_chunks/
 ├── outputs_sentences/
 ├── outputs_triples/
 ├── outputs_mentions/
-├── outputs_metrics/               # Reportes/CSVs/plots (notebooks)
-├── t2g_cli.py                     # CLI unificado: parse · chunk · sentences · triples · mentions · ie · pipeline-yaml
+├── outputs_entities/              
+├── outputs_metrics/
+├── t2g_cli.py
 ├── requirements.txt
 └── README.md
+```
 ```
 
 > **Nota:** coloca tus archivos de prueba en `docs/`:
@@ -362,6 +375,79 @@ python t2g_cli.py ie \
   --boost-conf 0.08 \
   --validate
 ```
+### 7) Normalización (Mentions → Entities)
+
+**Entrada:** `DocumentMentions`
+**Salida:** `DocumentEntities` (`outputs_entities/{DOC}_entities.json`)
+
+**Qué hace (resumen):**
+
+* Toma las **menciones** (NER/RE) y las convierte en **entidades normalizadas** con claves canónicas y valores tipados.
+* **Mapea etiquetas** de entrada (incluidas variantes spaCy como `PER`, `GPE`) a un conjunto de tipos T2G: `PERSON`, `ORG`, `LOC`, `DATE`, `MONEY`, `EMAIL`, `URL`, `TITLE`, `DEGREE`, `ID`, `PRODUCT`, `OTHER`.
+* Aplica **heurísticas de superficie** para corregir ruido frecuente:
+
+  * Direcciones → `LOC` (p. ej., “Calle Falsa 123”).
+  * Sufijos/forma de empresa → `ORG` (p. ej., “S.A. de C.V.”, “Ltd.”, “Inc.”).
+  * País/ciudad obvios → `LOC`.
+  * Cargos comunes → `TITLE` (p. ej., “Director de Datos”).
+  * Disciplinas/áreas de estudio no se etiquetan como `LOC` (pasan a `OTHER`).
+* **Normaliza valores**:
+
+  * `DATE` → ISO-8601 (`value_iso`) + `precision` (`year`, `month`, `day`) con `date_locale`.
+  * `MONEY` → número (`normalized_value`) + `currency` (MXN, USD, …) con `default_currency` si no viene explícita.
+  * `EMAIL` → `email_norm`, `user`, `domain`.
+  * `URL` → `url_norm` + despiece (`scheme`, `host`, `path`…).
+  * `ORG` → `org_core`, `org_suffix` detectados y `org_key` (slug estable).
+  * `PERSON` → `given_name`, `family_name`, `person_key` (slug estable).
+  * `TITLE` / `DEGREE` → `*_canonical`.
+* Hace **merge/dedupe por clave** (p. ej., `email_norm`, `url_norm`, `value_iso`, `org_key`, `person_key`, `loc_key`), **conservando trazabilidad** a `mentions` y agregando contadores.
+
+**Contrato de salida (resumen):**
+
+```json
+{
+  "doc_id": "DOC-XXXX",
+  "entities": [
+    {
+      "id": "ENT-abcdef12",
+      "type": "ORG",
+      "name": "acme corp",
+      "value": null,
+      "attrs": {
+        "org_core": "acme corp",
+        "org_suffix": ["inc"],
+        "org_key": "acme-corp",
+        "raw": "ACME Corp."
+      },
+      "mentions": ["e123","e456"],
+      "conf": 0.72
+    }
+  ],
+  "meta": {
+    "counters": {
+      "input_mentions": 27,
+      "kept_protos": 25,
+      "entities": 21
+    },
+    "config": {
+      "date_locale": "auto",
+      "min_conf_keep": 0.66,
+      "merge_threshold": 0.92,
+      "canonicalize": true,
+      "default_currency": "MXN"
+    }
+  }
+}
+```
+
+**Flags clave (CLI):**
+
+* `--mentions-glob` (entrada), `--outdir` (salida, por defecto `outputs_entities`)
+* `--date-locale {auto|es|en}` (ISO por idioma; `auto` decide por mención)
+* `--default-currency` (p. ej., `MXN`)
+* `--min-conf-keep` (0.66 recomendado; filtra menciones débiles)
+* `--merge-threshold` (0.92 recomendado; gobierna heurísticas de unión “casi iguales”)
+* `--canonicalize` (activar/desactivar normalizaciones canónicas)
 
 **Consejos:**
 
@@ -562,6 +648,18 @@ python t2g_cli.py ie \
 # Activa HF offline:
 #   --use-transformers --hf-rel-model-path "hf_plugins/re_models/relation_mini" --hf-device cpu
 ```
+### 8) Normalización (Mentions → Entities)
+
+```bash
+python t2g_cli.py normalize \
+  --mentions-glob "outputs_mentions/*_mentions.json" \
+  --outdir outputs_entities \
+  --date-locale auto \
+  --default-currency MXN \
+  --min-conf-keep 0.66 \
+  --merge-threshold 0.92 \
+  --canonicalize
+```
 
 ### 7) Pipeline declarativo (YAML)
 
@@ -661,6 +759,18 @@ stages:
       validate: true
       clean_outdir_triples: false
       clean_outdir_mentions: true
+
+  - name: normalize
+    args:
+      clean_outdir: true
+      mentions_glob: "outputs_mentions/*_mentions.json"
+      outdir: "outputs_entities"
+      date_locale: "auto"        # es | en | auto
+      default_currency: "MXN"
+      min_conf_keep: 0.66
+      merge_threshold: 0.92
+      canonicalize: true
+
 ```
 
 > **Alternativas avanzadas:**
@@ -845,6 +955,90 @@ if not rel_df.empty and not tri_df.empty:
 else:
     print("No hay datos suficientes para calcular soporte.")
 ```
+
+## Normalización
+
+La etapa de **Normalización** no solo produce entidades “limpias”; también ofrece **contadores y métricas** que sirven para auditar calidad y consistencia.
+
+### Contadores en cada salida (`meta.counters`)
+
+* `input_mentions`: nº de menciones leídas desde `DocumentMentions`.
+* `kept_protos`: nº de menciones que pasaron filtros de confianza y se transformaron en **prototipos de entidades**.
+* `entities`: nº de entidades finales tras el proceso de merge/dedupe.
+
+👉 Interpretación:
+
+* `kept_protos / input_mentions`: eficiencia de filtrado (muy bajo = muchos descartes por confianza).
+* `entities / kept_protos`: tasa de colapso (muy bajo = se fusionaron demasiado; muy alto = pocas fusiones).
+
+---
+
+### Funciones en `normalizer/metrics.py`
+
+```python
+from typing import Dict, Any
+import statistics
+
+def summary(doc: Dict[str, Any]) -> Dict[str, Any]:
+    """
+    Calcula métricas simples a partir de un DocumentEntities (dict).
+    Retorna:
+      - by_type: conteo de entidades por tipo
+      - avg_mentions_per_entity
+      - conf_stats: min, max, mean
+    """
+    ents = doc.get("entities", [])
+    if not ents:
+        return {"by_type": {}, "avg_mentions_per_entity": 0, "conf_stats": {}}
+
+    by_type = {}
+    mentions_per_entity = []
+    confs = []
+    for e in ents:
+        t = e.get("type", "OTHER")
+        by_type[t] = by_type.get(t, 0) + 1
+        mentions_per_entity.append(len(e.get("mentions", [])))
+        confs.append(e.get("conf", 0.0))
+
+    return {
+        "by_type": by_type,
+        "avg_mentions_per_entity": round(statistics.mean(mentions_per_entity), 2),
+        "conf_stats": {
+            "min": round(min(confs), 3),
+            "max": round(max(confs), 3),
+            "mean": round(statistics.mean(confs), 3)
+        }
+    }
+```
+
+---
+
+### Ejemplo de uso en notebook
+
+```python
+import json
+from pathlib import Path
+from normalizer.metrics import summary
+
+doc_id = "DOC-XXXX"
+path = Path("outputs_entities") / f"{doc_id}_entities.json"
+
+doc = json.loads(path.read_text(encoding="utf-8"))
+print(summary(doc))
+```
+
+ Salida típica:
+
+```python
+{
+  'by_type': {'ORG': 8, 'PERSON': 5, 'LOC': 4, 'DATE': 2, 'TITLE': 2, 'DEGREE': 1},
+  'avg_mentions_per_entity': 1.7,
+  'conf_stats': {'min': 0.66, 'max': 0.91, 'mean': 0.74}
+}
+```
+
+---
+
 
 **Export a grafo (opcional):**
 
