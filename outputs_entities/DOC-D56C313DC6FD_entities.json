@@ -1,0 +1,81 @@
+{
+  "doc_id": "DOC-D56C313DC6FD",
+  "entities": [
+    {
+      "id": "ENT-f7bc4bd8ed",
+      "type": "PERSON",
+      "name": "Anna Fitzgerald",
+      "value": null,
+      "attrs": {
+        "given_name": "Anna",
+        "family_name": "Fitzgerald",
+        "person_key": "anna-fitzgerald",
+        "raw": "Anna Fitzgerald"
+      },
+      "mentions": [
+        "5ad878b1c8120d4564d857aaa4a9909955e7f0a3"
+      ],
+      "conf": 0.72
+    },
+    {
+      "id": "ENT-6c31bcd51c",
+      "type": "PERSON",
+      "name": "Zendaya Grace",
+      "value": null,
+      "attrs": {
+        "given_name": "Zendaya",
+        "family_name": "Grace",
+        "person_key": "zendaya-grace",
+        "raw": "Zendaya Grace"
+      },
+      "mentions": [
+        "2f28540f42a806773b385a1b0befe8624f31f1f5"
+      ],
+      "conf": 0.72
+    },
+    {
+      "id": "ENT-5363cf9b8a",
+      "type": "PERSON",
+      "name": "John Smith",
+      "value": null,
+      "attrs": {
+        "given_name": "John",
+        "family_name": "Smith",
+        "person_key": "john-smith",
+        "raw": "John Smith"
+      },
+      "mentions": [
+        "00f544bcdb3112a05f1c02993f413f517cbbd263"
+      ],
+      "conf": 0.72
+    },
+    {
+      "id": "ENT-dfded9daa4",
+      "type": "TITLE",
+      "name": "Manager",
+      "value": "Manager",
+      "attrs": {
+        "title_raw": "Manager",
+        "title_canonical": "Manager"
+      },
+      "mentions": [
+        "060caf3ec4e4fe4f15fe6f61b0c48fb274fb662a"
+      ],
+      "conf": 0.67
+    }
+  ],
+  "meta": {
+    "counters": {
+      "input_mentions": 4,
+      "kept_protos": 4,
+      "entities": 4
+    },
+    "config": {
+      "date_locale": "auto",
+      "min_conf_keep": 0.66,
+      "merge_threshold": 0.92,
+      "canonicalize": true,
+      "default_currency": "MXN"
+    }
+  }
+}

@@ -88,7 +88,7 @@ project_T2G/
 ├── requirements.txt
 └── README.md
 ```
-```
+
 
 > **Nota:** coloca tus archivos de prueba en `docs/`:
 >
