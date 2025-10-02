@@ -20,5 +20,5 @@ stages:
       embedding_model: "all-MiniLM-L6-v2"
       nr_topics: null     # null → None
       seed: 42
-      cache_dir: ".cache_embeddings"   # opcional, si quieres caching
+      #cache_dir: ".cache_embeddings"   # opcional, si quieres caching
       outdir: "outputs_doc_topics"
