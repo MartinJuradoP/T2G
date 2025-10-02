@@ -1,700 +1,188 @@
 # 📚 Proyecto T2G — Knowledge Graph a partir de Documentos
 
-**T2G** es una *pipeline modular* para convertir documentos heterogéneos (PDF, DOCX, imágenes) en una **Representación Intermedia (IR) homogénea**, segmentarlos en **chunks** semánticos, luego en **oraciones filtradas**, y finalmente extraer **triples (S,R,O)** listos para RAG/IE/grafos.
+**T2G** es una *pipeline modular y extensible* que convierte documentos heterogéneos (PDF, DOCX, imágenes) en una **Representación Intermedia (IR) homogénea**, los enriquece con **contexto semántico global y local**, y prepara la base para construir **grafos de conocimiento** y sistemas de **búsqueda avanzada (RAG, QA, compliance, etc.)**.
 
-* **Entrada:** PDF / DOCX / IMG
-* **Salidas (hoy):** **IR (JSON)** → **Chunks (JSON)** → **Sentences (JSON)** → **Triples (JSON)**
-* **Diseño:** subsistemas desacoplados, contratos claros, ejecución CLI/YAML
+* **Entrada (hoy):** PDF / DOCX / PNG / JPG
+* **Salidas (hoy):**
+
+  * `DocumentIR (JSON)`
+  * `DocumentIR+Topics (JSON)`
+* **Salidas futuras:** Chunks, Mentions, Entities, Triples, Normalización, Grafo.
+* **Diseño:** subsistemas **desacoplados**, contratos **Pydantic**, orquestación vía **CLI + YAML**.
 
 ---
 
 ## ✨ Objetivos
 
-* Convertir documentos heterogéneos en una **IR homogénea JSON** con bloques y tablas.
-* Desarrollar, probar y orquestar los **subsistemas**: Parser, Chunker, Sentence/Filter, Triples (dep.), **Mentions (NER/RE)**, Normalización, Publicación, Retriever, Evaluación.
-* Sentar base para **grafos de conocimiento**, **QA empresarial** y **compliance**.
-* Mantener una arquitectura **escalable y modular**, con **contratos Pydantic** y CLIs consistentes.
+* Unificar la ingesta de documentos en una **IR JSON común** independientemente del formato.
+* Enriquecer documentos con **contexto semántico a nivel documento y chunk** usando **embeddings + BERTopic**.
+* Mantener una arquitectura **resiliente, escalable y modular**: cada subsistema puede ejecutarse de forma independiente.
+* Preparar la base para **grafos de conocimiento**, **QA empresarial**, **compliance regulatorio** y **sistemas RAG**.
 
 ---
 
-## 🧩 Subsistemas (vivos y planeados)
+## 🧩 Subsistemas
 
-| Nº | Subsistema            | Rol                                                      | I/O                                     | Estado |
-| -: | --------------------- | -------------------------------------------------------- | --------------------------------------- | ------ |
-|  1 | **Parser**            | Unificar formatos a **IR JSON/MD** con layout y tablas   | Doc → **IR**                            | ✅      |
-|  2 | **HybridChunker**     | Chunks **cohesivos** con tamaños estables y solapamiento | IR → **Chunks**                         | ✅      |
-|  3 | **Sentence/Filter**   | Dividir en **oraciones** y filtrar ruido antes de IE     | Chunks → **Sentences**                  | ✅      |
-|  4 | **Triples (dep.)**    | (S,R,O) ligeros ES/EN (spaCy + regex)                    | Sentences → **Triples**                 | ✅      |
-|  5 | **Mentions (NER/RE)** | Menciones de entidades/relaciones + consenso con Triples | Sentences → **Mentions**                | ✅      |
-|  6 | **Normalización**     | Fechas, montos, IDs, orgs                                | Mentions → **Entidades**                | ✅      |
-|  7 | Publicación           | Índices / grafo 1-hop                                    | Chunks/Ent/Triples → ES/Qdrant/PG/Grafo | 🕒     |
-|  8 | Retriever (cascada)   | Recall → Precisión                                       | Query → Contexto                        | 🕒     |
-|  9 | Evaluación & HITL     | Calidad / drift / lazo humano                            | Respuestas → Scores                     | 🕒     |
-| 10 | **IE (orquestador)**  | Reusa/crea Triples y ejecuta Mentions con boost          | Sentences/(Chunks) → Triples+Mentions   | ✅      |
+| Nº | Subsistema                       | Rol principal                                                               | Entrada             | Salida                   | Estado |
+| -: | -------------------------------- | --------------------------------------------------------------------------- | ------------------- | ------------------------ | ------ |
+|  1 | **Parser**                       | Genera **IR JSON** homogénea con metadatos y layout                         | Doc (PDF/DOCX/IMG)  | `DocumentIR` JSON        | ✅      |
+|  2 | **BERTopic Contextizer (doc)**   | Asigna **tópicos y keywords globales** a nivel documento                    | `DocumentIR`        | `DocumentIR+Topics` JSON | ✅      |
+|  3 | **HybridChunker**                | Segmenta documento en **chunks semánticos estables (≤2048 tokens)**         | `DocumentIR+Topics` | `DocumentChunks` JSON    | 🔜     |
+|  4 | **BERTopic Contextizer (chunk)** | Asigna tópicos locales a cada chunk (subtemas); enlaza con tópicos globales | `DocumentChunks`    | `Chunks+Topics` JSON     | 🔜     |
+|  5 | **Adaptive Schema Selector**     | Define dinámicamente entidades relevantes según contexto                    | `Chunks+Topics`     | `SchemaSelection` JSON   | 🔜     |
+|  6 | **Mentions (NER/RE)**            | Detecta menciones condicionadas por tópicos                                 | `Chunks+Topics`     | `Mentions` JSON          | 🔜     |
+|  7 | **Clustering de Menciones**      | Agrupa spans en clusters semánticos                                         | `Mentions` JSON     | `Clusters` JSON          | 🔜     |
+|  8 | **Weak Supervision / Label**     | Etiqueta clusters de alta confianza (Snorkel-style)                         | `Clusters`          | `LabeledClusters` JSON   | 🔜     |
+|  9 | **LLM Intervention**             | Clasifica clusters ambiguos con **few-shot prompting o prototipos**         | `Clusters`          | `RefinedLabels` JSON     | 🔜     |
+| 10 | **Normalización (híbrida)**      | Canonicaliza entidades y estandariza representaciones                       | `Mentions/Clusters` | `Entities` JSON          | 🔜     |
+| 11 | **Graph Export**                 | Publica entidades y relaciones en grafos (Neo4j, GraphDB, RDF/SHACL)        | `Entities+Triples`  | Grafo / DB               | 🔜     |
 
 ---
 
 ## 📂 Estructura del proyecto
 
-```
 ```bash
 project_T2G/
-├── docs/                          # Documentos de prueba
-├── parser/
+├── docs/                   # Documentos de prueba
+├── parser/                 # Subsistema Parser
 │   ├── parsers.py
 │   ├── metrics.py
 │   ├── schemas.py
 │   └── __init__.py
-├── chunker/
-│   ├── hybrid_chunker.py
+├── contextizer/            # Subsistema Contextizer
+│   ├── contextizer.py
 │   ├── metrics.py
-│   └── __init__.py
-├── sentence_filter/
-│   ├── sentence_filter.py
-│   ├── metrics.py
+│   ├── models.py
+│   ├── utils.py
 │   ├── schemas.py
 │   └── __init__.py
-├── triples/
-│   ├── dep_triples.py
-│   ├── metrics.py
-│   ├── schemas.py
-│   └── __init__.py
-├── mentions/
-│   ├── ner_re.py
-│   ├── hf_plugins.py
-│   ├── schemas.py
-│   └── __init__.py
-├── normalizer/                    
-│   ├── normalizer.py              
-│   ├── config.py                  
-│   ├── schemas.py                
-│   ├── merge.py                   
-│   ├── rules.py                  
-│   ├── utils.py                   
-│   ├── metrics.py                 
-│   └── __init__.py
-├── tools/
-│   └── validate_ie.py
 ├── pipelines/
 │   └── pipeline.yaml
-├── outputs_ir/
-├── outputs_chunks/
-├── outputs_sentences/
-├── outputs_triples/
-├── outputs_mentions/
-├── outputs_entities/              
-├── outputs_metrics/
-├── t2g_cli.py
+├── outputs_ir/             # Salidas: DocumentIR
+├── outputs_doc_topics/     # Salidas: IR+Topics
+├── t2g_cli.py              # CLI unificado
 ├── requirements.txt
 └── README.md
 ```
 
+---
 
-> **Nota:** coloca tus archivos de prueba en `docs/`:
->
-> ```
-> docs/
-> ├── Resume Martin Jurado_CDAO_24.pdf
-> ├── tabla.png
-> └── ejemplo.docx
-> ```
+## 🧠 Etapas explicadas
 
 ---
 
-## 🧠 Qué hace cada etapa
-
-
-> Cada etapa toma una entrada bien definida y devuelve un JSON con **contrato Pydantic**. Abajo verás: **entrada → salida**, cómo decide, campos clave y flags útiles.
-
----
-
-### 1) Parser (Doc → IR)
+### 1) Parser (Doc → IR) ✅
 
 **Entrada:** PDF / DOCX / PNG / JPG
 **Salida:** `DocumentIR` (`outputs_ir/{DOC}_*.json`)
 
 **Qué hace:**
 
-* Detecta tipo por **extensión/MIME** y enruta a un parser especializado.
-* **PDF (pdfplumber):**
+* Detecta formato y selecciona parser:
 
-  * Extrae **texto por líneas** y **tablas** usando heurísticas de líneas (estrategias vertical/horizontal).
-  * Si una página no tiene texto/tabla, aplica **OCR por página** (Tesseract) como *fallback*.
-* **DOCX (python-docx):** lee párrafos y estilos (para *headings*), serializa tablas por celdas. Se considera una “página lógica”.
-* **IMG (Pillow + Tesseract):** OCR directo; normaliza espacios y guiones rotos.
-* **Normaliza**: `normalize_whitespace`, `dehyphenate`.
-* **Anota metadatos:** `size_bytes`, `page_count`, `mime`, `source_path`, `created_at`.
+  * **PDF:** texto + tablas (pdfplumber); OCR fallback si escaneado.
+  * **DOCX:** párrafos, headings, tablas (python-docx).
+  * **IMG:** OCR (pytesseract).
+* Normaliza espacios, guiones cortados, saltos de línea.
+* Añade metadatos: `sha256`, `mime`, `page_count`, `size_bytes`.
 
-**Contrato de salida (resumen):**
+**Ejemplo de salida:**
 
 ```json
 {
-  "doc_id": "DOC-XXXX",
+  "doc_id": "DOC-12345",
   "pages": [
     {
-      "page_idx": 0,
+      "page_number": 1,
       "blocks": [
-        {"kind": "text", "text": "…", "bbox": [x0,y0,x1,y1]},
-        {"kind": "table", "rows": [["A","B"],["C","D"]], "bbox": [ … ]},
-        {"kind": "figure", "caption": "…", "bbox": [ … ]}
+        {"type": "paragraph", "text": "Los leones viven en África..."},
+        {"type": "table", "cells": [{"row":0,"col":0,"text":"Dato"}]}
       ]
     }
   ],
-  "meta": {"mime":"application/pdf","page_count":1,"source_path":"docs/x.pdf"}
-}
-```
-
-**Flags útiles:** *(se configuran en el parser internamente; no hay flags CLI aquí)*
-
-**Notas:**
-
-* Si planeas OCR, instala Tesseract y su pack de idioma (es/en).
-* IR es **la base de verdad** para el resto de etapas; si algo se ve raro aquí, arrastrará ruido después.
-
----
-
-### 2) HybridChunker (IR → Chunks)
-
-**Entrada:** `DocumentIR`
-**Salida:** `DocumentChunks` (`outputs_chunks/{DOC}_chunks.json`)
-
-**Qué hace:**
-
-1. **Aplana** la IR a una secuencia `{kind, text, page_idx, block_idx}`.
-
-   * `heading` se pasa a texto con prefijo `#` para conservar jerarquía (y se puede **pegar** con el siguiente bloque).
-   * `table` se **serializa a texto** estilo CSV por filas (conserva contenido).
-2. **Empaqueta** en chunks *cohesivos* con un objetivo de longitud (`target_chars`), sin superar `max_chars`.
-3. Si un chunk excede, **corta por oración** usando spaCy si hay modelo; si no, **regex robusta**.
-4. Aplica **solapamiento** (`overlap`) en caracteres para dar **contexto continuo**.
-5. Etiqueta cada chunk como `text` / `table` / `mixed`.
-
-**Contrato de salida (resumen):**
-
-```json
-{
-  "doc_id": "DOC-XXXX",
-  "chunks": [
-    {
-      "chunk_id": 0,
-      "text": "…",
-      "kind": "mixed",
-      "meta": {
-        "chars": 1042, "overlap": 120,
-        "page_span": [0,0], "block_span": [3,7]
-      }
-    }
-  ]
-}
-```
-
-**Flags clave:**
-
-* `--target-chars` (≈1400 recomendado), `--max-chars` (2048), `--min-chars` (400), `--overlap` (120).
-* `--sentence-splitter {auto|spacy|regex}` (solo afecta cortes internos).
-* `--table-policy {isolate|merge}`: mantener tablas separadas o fusionarlas cuando convenga.
-
-**Consejos:**
-
-* Si “rompe” demasiado los párrafos, baja `target_chars` o usa `spacy` en `sentence_splitter`.
-* Si tienes muchos cuadros/tablas, prueba `table_policy=merge` para evitar chunks minúsculos.
-
----
-
-### 3) Sentence/Filter (Chunks → Sentences)
-
-**Entrada:** `DocumentChunks`
-**Salida:** `DocumentSentences` (`outputs_sentences/{DOC}_sentences.json`)
-
-**Qué hace:**
-
-1. **Normaliza**: colapsa espacios, repara guiones de línea, elimina bullets.
-2. **Divide en oraciones**: spaCy si está disponible; si no, **regex** (diseñada para no romper abreviaturas comunes).
-3. **Filtra ruido**:
-
-   * `min_chars` (descarta oraciones telegráficas),
-   * `drop_stopword_only` y `drop_numeric_only`,
-   * **dedupe**: `fuzzy` con `fuzzy_threshold` (evita repetir oraciones near-duplicadas).
-4. **Traza** cada oración al chunk origen (y por transitividad a la IR).
-
-**Contrato de salida (resumen):**
-
-```json
-{
-  "doc_id": "DOC-XXXX",
-  "sentences": [
-    {"text":"…","chunk_id":0,"span":[s,e]}
-  ],
   "meta": {
-    "counters": {
-      "total_split": 42, "kept": 28,
-      "dropped_short": 9, "dropped_numeric": 2,
-      "dropped_dupe": 3, "keep_rate": 0.67
-    }
+    "mime":"application/pdf",
+    "page_count":1,
+    "sha256":"…",
+    "source_path":"docs/leones.pdf"
   }
 }
 ```
 
-**Flags clave:**
-
-* `--sentence-splitter {auto|spacy|regex}`, `--min-chars 25`, `--dedupe fuzzy`, `--fuzzy-threshold 0.92`.
-* Toggles: `--no-normalize-whitespace`, `--no-dehyphenate`, `--no-strip-bullets`, `--keep-stopword-only`, `--keep-numeric-only`.
-
-**Consejos:**
-
-* `keep_rate` entre **0.6–0.9** suele ser sano; muy bajo = filtros agresivos, muy alto = ruido.
-* Si salen oraciones “cortadas”, fuerza `--sentence-splitter spacy`.
-
 ---
 
-### 4) Triples (Sentences → Triples)
+### 2) BERTopic Contextizer (doc-level) ✅
 
-**Entrada:** `DocumentSentences`
-**Salida:** `DocumentTriples` (`outputs_triples/{DOC}_triples.json`)
+**Entrada:** `DocumentIR` (`outputs_ir/*.json`)
+**Salida:** `DocumentIR+Topics` (`outputs_doc_topics/*.json`)
 
 **Qué hace:**
 
-* Extrae **(Sujeto, Relación, Objeto)** con un enfoque bilingüe **ES/EN**:
+* Calcula embeddings globales con **SentenceTransformers (`all-MiniLM-L6-v2`)**.
+* Descubre tópicos con **BERTopic**.
+* Si hay pocos chunks:
 
-  * **spaCy (si disponible)**: reglas de dependencias (SVO, copulares, preposicionales, nominal+prep, apposición → `alias`, pasiva de adquisición, empleo/cargo).
-  * **Regex de respaldo** si no hay spaCy o el árbol no ayuda (copulares, adquisición, empleo, prep genéricas).
-* **Anti-ruido**: ignora líneas tipo contacto (URLs, emails, teléfonos), headings `#`, cadenas con casi solo números/puntuación.
-* **Canonicaliza** relaciones (opcional): **superficies ES/EN** → **forma común** (p. ej., `trabaja_en` / `works at` → `works_at`).
-* Asigna **confianza `conf`** por regla (regex genéricas ≈0.60; dependencias mayores).
+  * 0–1 → topic único (singleton).
+  * 2 → fallback basado en frecuencia de términos.
+  * 3+ → BERTopic normal.
+* Enriquecimiento agregado a `meta.topics_doc`:
 
-**Contrato de salida (resumen):**
+  * `n_topics`, `keywords_global`, `exemplar`, `outlier_ratio`.
 
-```json
-{
-  "doc_id": "DOC-XXXX",
-  "triples": [
-    {
-      "subject":"Alice","relation":"works_at","object":"ACME",
-      "meta":{
-        "dep_rule":"VERB_prep_pobj_nsubj",
-        "rel_surface":"works at",
-        "conf":0.74,"lang":"en",
-        "sentence_idx":12,"span":[s,e]
-      }
-    }
-  ],
-  "meta":{"counters":{"used_sents": 3}}
-}
-```
-
-**Flags clave:**
-
-* `--spacy {auto|force|off}` (fuerza dependencias o usa solo regex),
-* `--min-conf-keep 0.66` (recomendado),
-* `--max-triples-per-sentence 4`,
-* `--lang {auto|es|en}`,
-* `--no-canonicalize-relations` (si quieres conservar la superficie textual).
-
-**Consejos:**
-
-* Si ves demasiadas relaciones genéricas de preposición, **sube** `--min-conf-keep` a 0.70–0.72 o usa `--spacy force`.
-* Para auditoría, une por `sentence_idx` con `DocumentSentences` y revisa `meta.rel_surface`.
-
----
-
-### 5) Mentions (Sentences → Mentions) — **NER/RE + consenso con Triples**
-
-**Entrada:** `DocumentSentences` (+ opcionalmente `DocumentTriples` para boost)
-**Salida:** `DocumentMentions` (`outputs_mentions/{DOC}_mentions.json`)
-
-**Qué hace:**
-
-* Detecta **entidades** (regex/phrase/spaCy) y **relaciones** (DependencyMatcher/regex).
-* **Consenso/boost** contra Triples existentes:
-
-  * Si pasas `--boost-from-triples` (o hay `outputs_triples/*_triples.json`), cualquier relación mencionada en la **misma oración** y con la **misma relación** recibe un **incremento de confianza** (`boost_conf`), escalado por `triples_boost_weight`.
-* **HF (opcional, offline):** re-ranker local si pones `--use-transformers` y `--hf-rel-model-path` a una carpeta con un modelo de clasificación de relaciones. Esto **no descarga** nada.
-* Aplica filtros: `min_conf_keep`, `max_relations_per_sentence`, `canonicalize_labels`.
-
-**Contrato de salida (resumen):**
+**Ejemplo de salida:**
 
 ```json
-{
-  "doc_id":"DOC-XXXX",
-  "entities":[
-    {"id":"E0","text":"Alice","label":"PERSON","canonical_label":"person","span":[s,e],"conf":0.91}
-  ],
-  "relations":[
+"topics_doc": {
+  "reason": "doc-level",
+  "n_topics": 2,
+  "keywords_global": ["diabetes","insulina","síntomas"],
+  "topics": [
     {
-      "subj_entity_id":"E0","obj_entity_id":"E1",
-      "label":"works_at","canonical_label":"works_at",
-      "sentence_idx":12,"conf":0.78
-    }
-  ]
-}
-```
-
-**Flags clave:**
-
-* `--min-conf-keep 0.66`, `--max-relations-per-sentence 6`, `--canonicalize-labels`.
-* `--boost-from-triples "outputs_triples/*_triples.json"`, `--boost-conf 0.05–0.12`, `--triples-boost-weight 1.0`.
-* `--use-transformers`, `--hf-rel-model-path`, `--hf-device`, `--hf-batch-size`, `--hf-min-prob`, `--transformer-weight`.
-
-**Consejos:**
-
-* Si activas HF, **asegúrate** de que `hf_rel_model_path` apunte a un directorio local válido. Si no, déjalo apagado.
-* La métrica **Support\@Triples** (en `tools/validate_ie.py`) te dice qué % de relaciones en Mentions están soportadas por Triples en la misma oración.
-
----
-
-### 6) IE (Orquestador por documento) — **recomendado**
-
-**Entrada:** `DocumentSentences` (o `chunks` si quieres que genere oraciones)
-**Salida:** `DocumentTriples` + `DocumentMentions` (carpetas de salida)
-
-**Qué hace:**
-
-1. **Resuelve oraciones:**
-
-   * Si das `--sents-glob`, usa esas oraciones.
-   * Si no y pasas `--chunks-glob`, **genera** `DocumentSentences`.
-   * Si no das nada, busca `outputs_sentences/*_sentences.json`.
-2. **Triples**: si **no existen** (o limpiaste), los **genera**; si existen, los **reusa**.
-3. **Mentions**: ejecuta NER/RE con **boost** desde los Triples producidos/encontrados.
-4. **Validación opcional**: `--validate` corre `tools/validate_ie.py` y reporta **Support\@Triples**.
-
-**Flags clave (las que realmente usarás):**
-
-* Fuentes/destinos: `--sents-glob`, `--chunks-glob`, `--outdir-sentences`, `--outdir-triples`, `--outdir-mentions`.
-* Calidad: `--min-conf-keep-triples`, `--min-conf-keep-mentions`, `--max-relations-per-sentence`, `--canonicalize-labels`, `--boost-conf`.
-* HF (opcional): `--use-transformers`, `--hf-rel-model-path`, `--hf-device`.
-* Ejecución: `--workers`, `--validate`, `--clean-outdir-mentions`, `--clean-outdir-triples`.
-
-**Ejemplo típico (sin HF):**
-
-```bash
-python t2g_cli.py ie \
-  --sents-glob "outputs_sentences/*_sentences.json" \
-  --outdir-triples outputs_triples \
-  --outdir-mentions outputs_mentions \
-  --boost-conf 0.08 \
-  --validate
-```
-### 7) Normalización (Mentions → Entities)
-
-**Entrada:** `DocumentMentions`
-**Salida:** `DocumentEntities` (`outputs_entities/{DOC}_entities.json`)
-
-**Qué hace (resumen):**
-
-* Toma las **menciones** (NER/RE) y las convierte en **entidades normalizadas** con claves canónicas y valores tipados.
-* **Mapea etiquetas** de entrada (incluidas variantes spaCy como `PER`, `GPE`) a un conjunto de tipos T2G: `PERSON`, `ORG`, `LOC`, `DATE`, `MONEY`, `EMAIL`, `URL`, `TITLE`, `DEGREE`, `ID`, `PRODUCT`, `OTHER`.
-* Aplica **heurísticas de superficie** para corregir ruido frecuente:
-
-  * Direcciones → `LOC` (p. ej., “Calle Falsa 123”).
-  * Sufijos/forma de empresa → `ORG` (p. ej., “S.A. de C.V.”, “Ltd.”, “Inc.”).
-  * País/ciudad obvios → `LOC`.
-  * Cargos comunes → `TITLE` (p. ej., “Director de Datos”).
-  * Disciplinas/áreas de estudio no se etiquetan como `LOC` (pasan a `OTHER`).
-* **Normaliza valores**:
-
-  * `DATE` → ISO-8601 (`value_iso`) + `precision` (`year`, `month`, `day`) con `date_locale`.
-  * `MONEY` → número (`normalized_value`) + `currency` (MXN, USD, …) con `default_currency` si no viene explícita.
-  * `EMAIL` → `email_norm`, `user`, `domain`.
-  * `URL` → `url_norm` + despiece (`scheme`, `host`, `path`…).
-  * `ORG` → `org_core`, `org_suffix` detectados y `org_key` (slug estable).
-  * `PERSON` → `given_name`, `family_name`, `person_key` (slug estable).
-  * `TITLE` / `DEGREE` → `*_canonical`.
-* Hace **merge/dedupe por clave** (p. ej., `email_norm`, `url_norm`, `value_iso`, `org_key`, `person_key`, `loc_key`), **conservando trazabilidad** a `mentions` y agregando contadores.
-
-**Contrato de salida (resumen):**
-
-```json
-{
-  "doc_id": "DOC-XXXX",
-  "entities": [
-    {
-      "id": "ENT-abcdef12",
-      "type": "ORG",
-      "name": "acme corp",
-      "value": null,
-      "attrs": {
-        "org_core": "acme corp",
-        "org_suffix": ["inc"],
-        "org_key": "acme-corp",
-        "raw": "ACME Corp."
-      },
-      "mentions": ["e123","e456"],
-      "conf": 0.72
-    }
-  ],
-  "meta": {
-    "counters": {
-      "input_mentions": 27,
-      "kept_protos": 25,
-      "entities": 21
+      "topic_id": 0,
+      "count": 5,
+      "exemplar": "Síntomas Clínicos más frecuentes...",
+      "keywords": ["síntomas","micción","aumento"]
     },
-    "config": {
-      "date_locale": "auto",
-      "min_conf_keep": 0.66,
-      "merge_threshold": 0.92,
-      "canonicalize": true,
-      "default_currency": "MXN"
+    {
+      "topic_id": 1,
+      "count": 4,
+      "exemplar": "Diabetes Tipo 2: Un enfoque clínico",
+      "keywords": ["diabetes","tratamiento","complicaciones"]
     }
-  }
+  ]
 }
 ```
 
-**Flags clave (CLI):**
+---
 
-* `--mentions-glob` (entrada), `--outdir` (salida, por defecto `outputs_entities`)
-* `--date-locale {auto|es|en}` (ISO por idioma; `auto` decide por mención)
-* `--default-currency` (p. ej., `MXN`)
-* `--min-conf-keep` (0.66 recomendado; filtra menciones débiles)
-* `--merge-threshold` (0.92 recomendado; gobierna heurísticas de unión “casi iguales”)
-* `--canonicalize` (activar/desactivar normalizaciones canónicas)
+### 3) HybridChunker 🔜
 
-**Consejos:**
+* Divide documento en **chunks semánticos ≤2048 tokens**.
+* Hereda `topics_doc` para mantener coherencia.
 
-* Si solo quieres **ajustar thresholds de Mentions** sin recalcular Triples, corre `ie` con `--clean-outdir-mentions` y deja Triples intactos.
-* Si tus documentos son muy telegráficos, baja `--min-conf-keep-mentions` a 0.55–0.60 y usa un `boost_conf` un poco más alto (0.10–0.12).
+### 4) BERTopic Contextizer (chunk-level) 🔜
+
+* Asigna tópicos específicos a cada chunk.
+* Permite detectar **subtemas** y transferir contexto.
+
+### 5) Adaptive Schema Selector 🔜
+
+* Define dinámicamente qué entidades extraer según tópicos.
+
+### 6) Mentions (NER/RE) 🔜
+
+* Detecta menciones de entidades **condicionadas por tópicos**.
+
+### 7–11) Clustering → Label → LLM → Normalización → Grafo 🔜
+
+* Agrupan spans, etiquetan con weak supervision, refinan con LLM y normalizan entidades.
+* Export final a **grafo de conocimiento**.
 
 ---
 
-**Checklist mental rápido**
+## 📂 Pipeline declarativo (YAML)
 
-* ¿IR se ve bien? → Sí: sigue. No: reintenta Parser u OCR.
-* ¿Chunks dentro de \[400, 2048] con overlap ≈120? → Sí.
-* ¿Sentences con `keep_rate` razonable (0.6–0.9)? → Sí.
-* ¿Triples con `min-conf-keep ≥ 0.66` y relaciones canónicas útiles? → Sí.
-* ¿Mentions con buen **Support\@Triples** (p. ej. ≥60–80% según dominio)? → Sí.
-
----
-
-
-## ⚙️ Instalación
-
-```bash
-python3 -m venv venv
-source venv/bin/activate
-pip install -r requirements.txt
-
-# OCR (si planeas usar fallback OCR en PDF y/o IMG)
-# macOS:  brew install tesseract tesseract-lang
-# Ubuntu: sudo apt install tesseract-ocr tesseract-ocr-spa
-
-# (Opcional) spaCy para mejores cortes y dependencias (Triples)
-pip install spacy
-python -m spacy download es_core_news_sm
-python -m spacy download en_core_web_sm
-```
-
----
-
-## ⚙️ Instalación
-
-> Recomendado: **Python 3.11**, entorno virtual, y (si vas a usar HF/torch) fijar `numpy<2` para evitar choques ABI.
-
-```bash
-# 1) Crear y activar venv
-python3 -m venv venv
-source venv/bin/activate        # Windows: venv\Scripts\activate
-
-# 2) Pip moderno
-python -m pip install --upgrade pip wheel setuptools
-
-# 3) Instalar dependencias del proyecto
-pip install -r requirements.txt
-```
-
-### OCR (opcional pero útil en PDF/IMG sin texto)
-
-```bash
-# macOS (Homebrew)
-brew install tesseract tesseract-lang
-
-# Ubuntu/Debian
-sudo apt update
-sudo apt install tesseract-ocr tesseract-ocr-spa
-
-# Windows (choco)
-choco install tesseract
-```
-
-### spaCy (opcional; mejora cortes y dependencias para Triples/Mentions)
-
-```bash
-pip install spacy
-python -m spacy download es_core_news_sm
-python -m spacy download en_core_web_sm
-```
-
-### (Opcional) PyTorch + Transformers para re-rank local en Mentions
-
-> Si **no** vas a usar re-rank HF, puedes saltarte esta sección y dejar `--use-transformers` desactivado.
-
-**CPU / macOS (MPS):**
-
-```bash
-pip install "torch>=2.1,<2.3" transformers>=4.38,<4.43
-```
-
-**GPU NVIDIA (CUDA 12.1, ejemplo):**
-
-```bash
-pip install --index-url https://download.pytorch.org/whl/cu121 torch torchvision torchaudio
-pip install "transformers>=4.38,<4.43"
-```
-
-**Nota de compatibilidad (NumPy):**
-Si ves el error *“A module that was compiled using NumPy 1.x cannot be run in NumPy 2.x”*, fija:
-
-```bash
-pip install "numpy<2" --upgrade
-```
-
-**Modelo HF offline (si decides activarlo):**
-
-```bash
-# Descarga un modelo de clasificación de relaciones a una carpeta local
-# (ejemplo ilustrativo — sustituye <repo_id>)
-huggingface-cli snapshot-download <repo_id> \
-  --local-dir hf_plugins/re_models/relation_mini
-
-# Luego lo habilitas en CLI con:
-# --use-transformers --hf-rel-model-path "hf_plugins/re_models/relation_mini"
-```
-
----
-
-## 🚀 Uso rápido (CLI)
-
-> Puedes correr etapas sueltas o usar el **orquestador `ie`** (recomendado) o el **pipeline declarativo YAML**.
-
-### 1) Parse → IR
-
-Convierte documentos a **IR JSON**.
-
-```bash
-python t2g_cli.py parse docs/Resume\ Martin\ Jurado_CDAO_24.pdf --outdir outputs_ir
-# Resultado: outputs_ir/DOC-XXXX.json
-```
-
-### 2) IR → Chunks
-
-Crea chunks semánticos con solapamiento.
-
-```bash
-python t2g_cli.py chunk outputs_ir/DOC-XXXX.json --outdir outputs_chunks \
-  --sentence-splitter auto --target-chars 1400 --max-chars 2048 --overlap 120
-# Resultado: outputs_chunks/DOC-XXXX_chunks.json
-```
-
-### 3) Chunks → Sentences
-
-Split por oraciones + filtros/normalización.
-
-```bash
-python t2g_cli.py sentences outputs_chunks/DOC-XXXX_chunks.json \
-  --outdir outputs_sentences \
-  --sentence-splitter auto \
-  --min-chars 25 \
-  --dedupe fuzzy \
-  --fuzzy-threshold 0.92
-# Resultado: outputs_sentences/DOC-XXXX_sentences.json
-```
-
-### 4) Sentences → Triples
-
-Triples (S,R,O) bilingües con reglas de dependencias/regex.
-
-```bash
-python t2g_cli.py triples outputs_sentences/DOC-XXXX_sentences.json \
-  --outdir outputs_triples \
-  --lang auto --ruleset default-bilingual \
-  --spacy auto --max-triples-per-sentence 4 \
-  --min-conf-keep 0.66
-# Tip: añade --no-canonicalize-relations si quieres conservar superficie cruda.
-# Resultado: outputs_triples/DOC-XXXX_triples.json
-```
-
-### 5) Sentences → Mentions (NER/RE + consenso con Triples)
-
-Si ya tienes triples y quieres iterar rápido en NER/RE:
-
-```bash
-python t2g_cli.py mentions outputs_sentences/DOC-XXXX_sentences.json \
-  --outdir outputs_mentions \
-  --lang auto --spacy auto \
-  --min-conf-keep 0.66 \
-  --max-relations-per-sentence 6 \
-  --boost-from-triples "outputs_triples/*_triples.json" \
-  --boost-conf 0.08
-# Opcional HF:
-# --use-transformers --hf-rel-model-path "hf_plugins/re_models/relation_mini" --hf-device cpu
-# Resultado: outputs_mentions/DOC-XXXX_mentions.json
-```
-
-### 6) IE — Orquestador por documento (recomendado)
-
-Hace: **(reusa o crea) Triples → Mentions con boost**.
-Si ya corriste `sentences`, esta es la forma más práctica:
-
-```bash
-python t2g_cli.py ie \
-  --sents-glob "outputs_sentences/*_sentences.json" \
-  --outdir-triples outputs_triples \
-  --outdir-mentions outputs_mentions \
-  --boost-conf 0.08 \
-  --validate
-# Limpia menciones para iterar thresholds sin recalcular triples:
-#   añade: --clean-outdir-mentions
-# Apaga spaCy (regex-only): --spacy off
-# Activa HF offline:
-#   --use-transformers --hf-rel-model-path "hf_plugins/re_models/relation_mini" --hf-device cpu
-```
-### 8) Normalización (Mentions → Entities)
-
-```bash
-python t2g_cli.py normalize \
-  --mentions-glob "outputs_mentions/*_mentions.json" \
-  --outdir outputs_entities \
-  --date-locale auto \
-  --default-currency MXN \
-  --min-conf-keep 0.66 \
-  --merge-threshold 0.92 \
-  --canonicalize
-```
-
-### 7) Pipeline declarativo (YAML)
-
-Corre todo el flujo desde `pipelines/pipeline.yaml`:
-
-```bash
-python t2g_cli.py pipeline-yaml
-# o
-python t2g_cli.py pipeline-yaml --file pipelines/pipeline.yaml
-```
-
----
-
-### Verificación rápida de salidas
-
-```bash
-# Revisa contadores
-jq '.meta.counters // {}' outputs_sentences/*_sentences.json | head
-jq '.meta.counters // {}' outputs_triples/*_triples.json | head
-jq '.meta.counters // {}' outputs_mentions/*_mentions.json | head
-
-# Valida soporte Triples→Mentions
-python tools/validate_ie.py --mentions outputs_mentions --triples outputs_triples
-```
-
-**Consejos finales:**
-
-* Si ves demasiadas relaciones “genéricas”, sube `--min-conf-keep` o usa `--spacy force`.
-* Si los documentos son telegráficos, baja `--min-conf-keep` en Mentions (0.55–0.60) y usa `--boost-conf 0.10–0.12`.
-* Si activas HF y no hay modelo local válido, el sistema sigue corriendo **sin** HF (log de advertencia).
-## 🧾 Pipeline declarativo (YAML)
-
-
-
-Archivo por defecto: `pipelines/pipeline.yaml`
+Archivo: `pipelines/pipeline.yaml`
 
 ```yaml
 pipeline:
@@ -712,415 +200,109 @@ stages:
         - "docs/*.docx"
       outdir: "outputs_ir"
 
-  - name: chunk
+  - name: contextize-doc
     args:
       clean_outdir: true
       ir_glob: "outputs_ir/*.json"
-      outdir: "outputs_chunks"
-      target_chars: 1400
-      max_chars: 2048
-      min_chars: 400
-      overlap: 120
-      table_policy: "isolate"
-      sentence_splitter: "auto"
-
-  - name: sentences
-    args:
-      clean_outdir: true
-      chunks_glob: "outputs_chunks/*_chunks.json"
-      outdir: "outputs_sentences"
-      sentence_splitter: "auto"
-      min_chars: 25
-      dedupe: "fuzzy"
-      fuzzy_threshold: 0.92
-      no_normalize_whitespace: false
-      no_dehyphenate: false
-      no_strip_bullets: false
-      keep_stopword_only: false
-      keep_numeric_only: false
-
-  # IE orquestador (recomendado)
-  - name: ie
-    args:
-      sents_glob: "outputs_sentences/*_sentences.json"
-      outdir_triples: "outputs_triples"
-      outdir_mentions: "outputs_mentions"
-      lang: "auto"
-      spacy: "auto"
-      min_conf_keep_triples: 0.66
-      min_conf_keep_mentions: 0.66
-      max_relations_per_sentence: 6
-      canonicalize_labels: true
-      boost_conf: 0.08
-      use_transformers: false         # true si tienes modelo HF local
-      # hf_rel_model_path: "hf_plugins/re_models/relation_mini"
-      # hf_device: "cpu"
-      workers: 4
-      validate: true
-      clean_outdir_triples: false
-      clean_outdir_mentions: true
-
-  - name: normalize
-    args:
-      clean_outdir: true
-      mentions_glob: "outputs_mentions/*_mentions.json"
-      outdir: "outputs_entities"
-      date_locale: "auto"        # es | en | auto
-      default_currency: "MXN"
-      min_conf_keep: 0.66
-      merge_threshold: 0.92
-      canonicalize: true
-
+      embedding_model: "all-MiniLM-L6-v2"
+      nr_topics: null
+      seed: 42
+      outdir: "outputs_doc_topics"
 ```
 
-> **Alternativas avanzadas:**
-> • Ejecutar **Triples** y **Mentions** como etapas independientes (útil para auditar o ajustar thresholds sin recalcular).
-> • Si omites `sentences`, puedes pasar `chunks_glob` al `ie` para que genere oraciones internamente.
-
----
 Ejecutar:
 
 ```bash
 python t2g_cli.py pipeline-yaml
-# o explícito:
-python t2g_cli.py pipeline-yaml --file pipelines/pipeline.yaml
 ```
 
 ---
 
 ## 📊 Métricas por subsistema
 
-### Parser
+### Parser ✅
 
-* **`percent_docs_ok`**: % de documentos parseados sin error (éxito de lote).
-* **`layout_loss`**: proporción `unknown/total` (proxy de pérdida de estructura).
-* **`table_consistency`**: tablas encontradas vs. valor *golden* (si existe).
+* `percent_docs_ok`: éxito de parseo por lote.
+* `layout_loss`: pérdida de estructura.
+* `table_consistency`: tablas detectadas vs esperadas.
 
-**Umbrales sugeridos:** `%docs_ok ≥ 95%`, `layout_loss ≤ 0.15`, `table_consistency.ratio ≥ 0.9`.
+### Contextizer (doc-level) ✅
 
-```python
-import json, glob
-from parser.schemas import DocumentIR
-from parser.metrics import percent_docs_ok, layout_loss, table_consistency
+* `coverage`: proporción de chunks asignados a algún tópico.
+* `outlier_rate`: ratio de outliers vs asignaciones válidas.
+* `topic_size_stats`: distribución (min, mediana, p95).
+* `keywords_diversity`: diversidad de keywords únicas.
 
-irs = []
-for path in sorted(glob.glob("outputs_ir/*.json")):
-    try:
-        irs.append(DocumentIR(**json.load(open(path, "r", encoding="utf-8"))))
-    except Exception:
-        continue
+### Próximos subsistemas 🔜
 
-ok_pct = percent_docs_ok(irs)
-losses = {ir.doc_id: layout_loss(ir) for ir in irs}
-cons   = {ir.doc_id: table_consistency(ir) for ir in irs}
+* **HybridChunker**: `chunk_length_stats`.
+* **Mentions**: `precision/recall vs golden`.
+* **Normalization**: % de entidades deduplicadas.
 
-print({"percent_docs_ok": round(ok_pct, 2)})
-print({"layout_loss_avg": round(sum(losses.values())/max(1,len(losses)), 4)})
-print({"table_consistency_sample": list(cons.items())[:2]})
+---
+
+## ⚙️ Instalación
+
+### Requisitos principales
+
+```bash
+python3 -m venv venv
+source venv/bin/activate
+pip install -r requirements.txt
+```
+
+### OCR
+
+```bash
+brew install tesseract tesseract-lang   # macOS
+sudo apt install tesseract-ocr-spa      # Ubuntu/Debian
+```
+
+### NLP / embeddings
+
+```bash
+pip install spacy sentence-transformers bertopic
+python -m spacy download es_core_news_sm
+python -m spacy download en_core_web_sm
+```
+
+### Opcionales
+
+```bash
+pip install torch joblib matplotlib wordcloud
 ```
 
 ---
 
-### HybridChunker
+## 🚀 Uso rápido (CLI)
 
-* **`chunk_length_stats`**: distribución de longitudes.
-* **`percent_within_threshold(min,max)`**: proporción de chunks dentro del rango (p. ej. 400–2048).
-* **`table_mix_ratio`**: proporción `text/mixed/table`.
+```bash
+# Parser → IR
+python t2g_cli.py parse docs/ejemplo.pdf --outdir outputs_ir
 
-**Umbrales sugeridos:** `within(400–2048) ≥ 0.95`.
+# Contextizer (doc) → IR+Topics
+python t2g_cli.py contextize-doc outputs_ir/*.json --outdir outputs_doc_topics
 
-```python
-import json, glob
-from chunker.schemas import DocumentChunks
-from chunker.metrics import chunk_length_stats, percent_within_threshold, table_mix_ratio
-
-for path in sorted(glob.glob("outputs_chunks/*_chunks.json"))[:3]:
-    dc = DocumentChunks(**json.load(open(path, "r", encoding="utf-8")))
-    print(dc.doc_id, {
-        "len_stats": chunk_length_stats(dc),
-        "within_400_2048": percent_within_threshold(dc, 400, 2048),
-        "mix": table_mix_ratio(dc)
-    })
+# Pipeline completo
+python t2g_cli.py pipeline-yaml
 ```
-
----
-
-### Sentence/Filter
-
-* **`meta.counters`** en salida: `total_split`, `kept`, `dropped_short`, `dropped_stopword`, `dropped_numeric`, `dropped_dupe`, `keep_rate`.
-* **`sentence_length_stats`**: distribución de longitudes de oraciones.
-* **`unique_ratio`**: proporción de oraciones únicas (detecta duplicados).
-
-**Umbrales sugeridos:** `keep_rate` saludable ≈ 0.6–0.9 según dominio; `unique_ratio ≥ 0.85`.
-
-```python
-import json, glob
-from sentence_filter.schemas import DocumentSentences
-from sentence_filter.metrics import sentence_length_stats, unique_ratio
-
-for path in sorted(glob.glob("outputs_sentences/*_sentences.json"))[:3]:
-    ds = DocumentSentences(**json.load(open(path, "r", encoding="utf-8")))
-    counters = ds.meta.get("counters", {})
-    print(ds.doc_id, {
-        "keep_rate": round(counters.get("keep_rate", 0), 3),
-        "kept": counters.get("kept"),
-        "len_stats": sentence_length_stats(ds),
-        "unique_ratio": round(unique_ratio(ds), 3)
-    })
-```
-
----
-
-### Triples
-
-* **Agregados:** nº de documentos, **nº de triples**, **unique ratio** (`drop_duplicates` por S,R,O).
-* **Distribución de relaciones** y **reglas** (qué patrones producen qué).
-* **`conf` stats** y efecto de `--min-conf-keep`.
-* **Auditoría con contexto:** join contra oraciones por `sentence_idx`.
-
-```python
-import json, glob, pandas as pd
-from triples.schemas import DocumentTriples
-
-rows = []
-for p in sorted(glob.glob("outputs_triples/*_triples.json")):
-    dt = DocumentTriples(**json.load(open(p)))
-    for t in dt.triples:
-        rows.append({
-          "doc_id": dt.doc_id,
-          "subject": t.subject, "relation": t.relation, "object": t.object,
-          "dep_rule": t.meta.get("dep_rule"), "conf": t.meta.get("conf"),
-          "lang": t.meta.get("lang"), "sentence_idx": t.meta.get("sentence_idx"),
-          "file": p
-        })
-
-df = pd.DataFrame(rows)
-print("Docs:", df["doc_id"].nunique(), "| Triples:", len(df))
-print("Unique ratio:", df.drop_duplicates(["subject","relation","object"]).shape[0]/max(1,len(df)))
-print("Top relaciones:\n", df["relation"].value_counts().head())
-print("Top reglas:\n", df["dep_rule"].value_counts().head())
-print("Conf stats:\n", df["conf"].describe())
-```
-
-### **Mentions (NER/RE)**
-
-**Agregados:**
-
-* Nº de entidades y relaciones por doc.
-* Distribución por etiquetas (`entity.label`, `relation.canonical_label`).
-* **Soporte por Triples**: % de relaciones de Mentions con pareja `(doc_id, sentence_idx, relation)` presente en Triples.
-
-**Snippet (soporte vs Triples):**
-
-```python
-import json, glob, pandas as pd
-
-# Carga Mentions
-mrs = []
-for p in sorted(glob.glob("outputs_mentions/*_mentions.json")):
-    dm = json.load(open(p, "r", encoding="utf-8"))
-    for r in dm.get("relations", []):
-        mrs.append({
-          "doc_id": dm.get("doc_id"),
-          "sentence_idx": r.get("sentence_idx"),
-          "label": r.get("canonical_label") or r.get("label") or "",
-          "subj": r.get("subj_entity_id"),
-          "obj": r.get("obj_entity_id"),
-          "conf": r.get("conf", 0.0),
-          "file": p
-        })
-rel_df = pd.DataFrame(mrs)
-
-# Carga Triples
-trs = []
-for p in sorted(glob.glob("outputs_triples/*_triples.json")):
-    dt = json.load(open(p, "r", encoding="utf-8"))
-    for t in dt.get("triples", []):
-        trs.append({
-          "doc_id": dt.get("doc_id"),
-          "sentence_idx": (t.get("meta", {}) or {}).get("sentence_idx"),
-          "relation": t.get("relation") or "",
-          "file": p
-        })
-tri_df = pd.DataFrame(trs)
-
-# Keys y soporte
-if not rel_df.empty and not tri_df.empty:
-    rel_df["key"] = rel_df.apply(lambda r: f"{r['doc_id']}::{int(r['sentence_idx'])}::{str(r['label']).lower()}", axis=1)
-    tri_df["key"] = tri_df.apply(lambda r: f"{r['doc_id']}::{int(r['sentence_idx'])}::{str(r['relation']).lower()}", axis=1)
-    tri_keys = set(tri_df["key"].tolist())
-    rel_df["supported"] = rel_df["key"].isin(tri_keys)
-    print("Support@Triples:", f"{rel_df['supported'].mean()*100:.2f}%", f"({rel_df['supported'].sum()}/{len(rel_df)})")
-    print(rel_df.groupby(["label","supported"]).size().unstack(fill_value=0).head())
-else:
-    print("No hay datos suficientes para calcular soporte.")
-```
-
-## Normalización
-
-La etapa de **Normalización** no solo produce entidades “limpias”; también ofrece **contadores y métricas** que sirven para auditar calidad y consistencia.
-
-### Contadores en cada salida (`meta.counters`)
-
-* `input_mentions`: nº de menciones leídas desde `DocumentMentions`.
-* `kept_protos`: nº de menciones que pasaron filtros de confianza y se transformaron en **prototipos de entidades**.
-* `entities`: nº de entidades finales tras el proceso de merge/dedupe.
-
-👉 Interpretación:
-
-* `kept_protos / input_mentions`: eficiencia de filtrado (muy bajo = muchos descartes por confianza).
-* `entities / kept_protos`: tasa de colapso (muy bajo = se fusionaron demasiado; muy alto = pocas fusiones).
-
----
-
-### Funciones en `normalizer/metrics.py`
-
-```python
-from typing import Dict, Any
-import statistics
-
-def summary(doc: Dict[str, Any]) -> Dict[str, Any]:
-    """
-    Calcula métricas simples a partir de un DocumentEntities (dict).
-    Retorna:
-      - by_type: conteo de entidades por tipo
-      - avg_mentions_per_entity
-      - conf_stats: min, max, mean
-    """
-    ents = doc.get("entities", [])
-    if not ents:
-        return {"by_type": {}, "avg_mentions_per_entity": 0, "conf_stats": {}}
-
-    by_type = {}
-    mentions_per_entity = []
-    confs = []
-    for e in ents:
-        t = e.get("type", "OTHER")
-        by_type[t] = by_type.get(t, 0) + 1
-        mentions_per_entity.append(len(e.get("mentions", [])))
-        confs.append(e.get("conf", 0.0))
-
-    return {
-        "by_type": by_type,
-        "avg_mentions_per_entity": round(statistics.mean(mentions_per_entity), 2),
-        "conf_stats": {
-            "min": round(min(confs), 3),
-            "max": round(max(confs), 3),
-            "mean": round(statistics.mean(confs), 3)
-        }
-    }
-```
-
----
-
-### Ejemplo de uso en notebook
-
-```python
-import json
-from pathlib import Path
-from normalizer.metrics import summary
-
-doc_id = "DOC-XXXX"
-path = Path("outputs_entities") / f"{doc_id}_entities.json"
-
-doc = json.loads(path.read_text(encoding="utf-8"))
-print(summary(doc))
-```
-
- Salida típica:
-
-```python
-{
-  'by_type': {'ORG': 8, 'PERSON': 5, 'LOC': 4, 'DATE': 2, 'TITLE': 2, 'DEGREE': 1},
-  'avg_mentions_per_entity': 1.7,
-  'conf_stats': {'min': 0.66, 'max': 0.91, 'mean': 0.74}
-}
-```
-
----
-
-
-**Export a grafo (opcional):**
-
-```python
-import json, glob, networkx as nx
-
-G = nx.MultiDiGraph()
-for p in sorted(glob.glob("outputs_mentions/*_mentions.json")):
-    dm = json.load(open(p, "r", encoding="utf-8"))
-    ents = {e["id"]: e for e in dm.get("entities", [])}
-    for r in dm.get("relations", []):
-        s = ents.get(r["subj_entity_id"]); o = ents.get(r["obj_entity_id"])
-        if not s or not o: continue
-        G.add_node(s["id"], label=s.get("canonical_label") or s.get("label"), text=s["text"])
-        G.add_node(o["id"], label=o.get("canonical_label") or o.get("label"), text=o["text"])
-        G.add_edge(s["id"], o["id"], r=r.get("canonical_label") or r.get("label"), conf=r.get("conf", 0.0))
-nx.write_gexf(G, "outputs_metrics/mentions_graph.gexf")
-print("Grafo exportado a outputs_metrics/mentions_graph.gexf")
-```
-
-**Auditoría con oración original:**
-
-```python
-import json, pandas as pd
-
-doc = "DOC-XXXX"
-dt = json.load(open(f"outputs_triples/{doc}_triples.json"))
-ds = json.load(open(f"outputs_sentences/{doc}_sentences.json"))
-
-trip = pd.json_normalize(dt["triples"])
-trip["sentence_idx"] = trip["meta.sentence_idx"]
-sents = pd.DataFrame(ds["sentences"]).assign(sentence_idx=lambda d: range(len(d)))
-audit = trip.merge(sents[["sentence_idx","text"]], on="sentence_idx", how="left")
-
-cols = ["subject","relation","object","meta.conf","meta.dep_rule","text"]
-print(audit[cols].head(12))
-```
-
-**Sugerencias de calidad:**
-
-* Usa `--min-conf-keep 0.66` para recortar `regex_prep` genéricas.
-* Si hay ruido de preposiciones, **sube** a 0.70–0.72 o activa spaCy (`--spacy force`) para más precisión estructural.
-* Desactiva `--no-canonicalize-relations` si necesitas la superficie cruda (útil para depuración).
 
 ---
 
 ## 🛠️ Troubleshooting
 
-* **JSONs vacíos/corruptos:** escritura **atómica**, el runner **salta** JSON inválidos. Limpia y re-ejecuta:
-
-  ```bash
-  rm -rf outputs_ir/* outputs_chunks/* outputs_sentences/* outputs_triples/*
-  python t2g_cli.py pipeline-yaml
-  ```
-* **spaCy no carga / modelos faltantes:** instala `es_core_news_sm` y `en_core_web_sm` o usa `--spacy off` (regex-only).
-* **OCR fallback no funciona:** instala Tesseract y verifica `PATH` (o `tesseract_cmd` en Windows).
-* **Imports fallan:** ejecuta desde la **raíz** (`python t2g_cli.py …`).
-* **Triples con “of/in/with” dominantes:** eleva `--min-conf-keep` o fuerza spaCy.
-* **Pandas `InvalidIndexError` en auditorías:** usa `reset_index(drop=True)` antes de `concat/merge`.
-* **Carpetas con “ruido” de corridas previas:** en YAML pon `clean_outdir: true` en cada etapa.
+* **JSONs vacíos:** borra outputs y reejecuta.
+* **OCR falla:** instala Tesseract y revisa `PATH`.
+* **spaCy no carga:** descarga modelos `es_core_news_sm`, `en_core_web_sm`.
+* **Errores de import:** ejecuta siempre desde raíz del proyecto.
 
 ---
 
 ## 🧪 Roadmap inmediato
 
-* NER/RE y normalización (fechas, montos, IDs).
-* Publicación a ES/Qdrant/Postgres/Grafo (con esquemas para triples).
-* Métricas de evaluación y lazo humano (RAGAS + HITL).
-* Tests (`pytest`) y *golden sets* de regresión.
+* Añadir **HybridChunker** con herencia de `topics_doc`.
+* Implementar **chunk-level contextizer**.
+* Integrar **Adaptive Schema Selector**.
+* Completar **Mentions + Clustering + Normalización**.
+* Exportar entidades y relaciones a **Neo4j / RDF**.
 
----
-
-## 📚 Referencias
-
-* **OCR:** PaddleOCR, Tesseract
-* **PDF:** pdfplumber
-* **DOCX:** python-docx
-* **NLP:** spaCy
-* **Papers:** DocRED (ACL 2019), K-Adapter (ACL 2020), AutoNER (ACL 2018), KG-BERT (AAAI 2020)
-
----
-
-## ⚖️ Licencia
-
-MIT (o la que definas).

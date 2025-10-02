@@ -1,3 +1,4 @@
+# -*- coding: utf-8 -*-
 """
 schemas.py — Modelos y contratos de la IR (Intermediate Representation)
 
@@ -5,6 +6,14 @@ Propósito
 ---------
 Definir una IR estandarizada (JSON/MD-like) para cualquier documento de entrada
 (PDF, DOCX, imágenes), preservando texto, layout básico y tablas.
+
+Esta versión MEJORADA incorpora:
+- Documentación más exhaustiva por clase/campo.
+- Campos de trazabilidad enriquecidos (source_lines, provenance notes).
+- Soporte opcional para métricas de layout, fusión de párrafos y OCR.
+- Extensibilidad: bloques genéricos (Block = Union[…]) y espacios reservados.
+- Compatibilidad hacia atrás: contratos JSON dict siguen funcionando.
+- Buenas prácticas: validaciones suaves con Pydantic, defaults sensatos.
 
 Principios
 ----------
@@ -24,6 +33,8 @@ from typing import List, Literal, Optional, Dict, Any, Union, Tuple
 from pydantic import BaseModel, Field, field_validator
 from datetime import datetime
 import uuid
+import hashlib
+import time
 
 # -------------------------------------------------------------------
 # Tipos base y alias
@@ -55,7 +66,7 @@ LanguageTag = Literal[
 # -------------------------------------------------------------------
 
 class BBox(BaseModel):
-    """Caja delimitadora (coordenadas de página)."""
+    """Caja delimitadora (bounding box) en coordenadas absolutas de página."""
     x0: float
     y0: float
     x1: float
@@ -71,9 +82,9 @@ class LayoutInfo(BaseModel):
     """Metadatos de layout opcionales a nivel de bloque."""
     bbox: Optional[BBox] = None
     page_rotation: Optional[int] = None
-    # Campo para guardar “fuente”/tamaño si alguna lib lo expone (pdfplumber words, etc.)
     font_name: Optional[str] = None
     font_size: Optional[float] = None
+    # futuro: color, weight, column_index
 
 class OCRInfo(BaseModel):
     """Metadatos de OCR opcionales a nivel de bloque."""
@@ -87,6 +98,7 @@ class Provenance(BaseModel):
     Procedencia de un bloque o documento:
     - extractor: componente usado (pdfplumber, python-docx, tesseract, etc.)
     - stage: etapa del pipeline que produjo el bloque (parser, ocr-fallback, normalizer, etc.)
+    - notes: comentarios adicionales, ej. source_lines=[2,3,4] tras fusión
     """
     extractor: Optional[str] = None
     stage: Optional[str] = None
@@ -102,10 +114,10 @@ class TableCell(BaseModel):
     col: int
     text: str = ""
     bbox: Optional[BBox] = None
-    conf: Optional[float] = None  # confianza por celda si hay OCR
+    conf: Optional[float] = None  # confianza OCR por celda si aplica
 
 class TableBlock(BaseModel):
-    """Bloque de tabla en la IR; cells contiene el contenido por fila/columna."""
+    """Bloque de tabla en la IR; contiene celdas (row/col)."""
     type: Literal["table"] = "table"
     cells: List[TableCell] = Field(default_factory=list)
     layout: Optional[LayoutInfo] = None
@@ -114,7 +126,7 @@ class TableBlock(BaseModel):
 
     @property
     def shape(self) -> Tuple[int, int]:
-        """Forma aproximada (n_rows, n_cols) a partir de índices máximos."""
+        """Forma aproximada (n_rows, n_cols) calculada de las celdas."""
         if not self.cells:
             return (0, 0)
         max_r = max(c.row for c in self.cells)
@@ -124,14 +136,14 @@ class TableBlock(BaseModel):
 class TextBlock(BaseModel):
     """
     Bloque de texto (párrafo, heading, list item, etc.).
-    - 'level' solo aplica si type == 'heading' (H1/H2/...)
     """
     type: Literal["heading", "paragraph", "list_item", "footer", "header", "unknown"]
     text: str
-    level: Optional[int] = None
+    level: Optional[int] = None            # solo aplica si type == 'heading'
     layout: Optional[LayoutInfo] = None
     ocr: Optional[OCRInfo] = None
     prov: Optional[Provenance] = None
+    source_lines: Optional[List[int]] = None  # índices de líneas crudas fusionadas
 
 class FigureBlock(BaseModel):
     """Bloque para figuras/imágenes con caption opcional."""
@@ -149,15 +161,13 @@ Block = Union[TextBlock, TableBlock, FigureBlock, Dict[str, Any]]
 # -------------------------------------------------------------------
 
 class PageIR(BaseModel):
-    """IR a nivel de página: dimensiones y lista de bloques estructurados."""
+    """IR a nivel de página: dimensiones, bloques estructurados y metadatos."""
     page_number: int
     width: Optional[float] = None
     height: Optional[float] = None
-    # Acepta instancias de modelos o dicts (para compatibilidad/velocidad)
     blocks: List[Block] = Field(default_factory=list)
-    # Señal de idioma dominante detectado en la página (si aplica)
     lang: LanguageTag = "und"
-    meta: Dict[str, Any] = Field(default_factory=dict)
+    meta: Dict[str, Any] = Field(default_factory=dict)  # métricas (fusion_rate, layout_loss, etc.)
 
 class DocumentIR(BaseModel):
     """
@@ -172,27 +182,27 @@ class DocumentIR(BaseModel):
     source_path: str
     mime: Optional[str] = None
     created_at: datetime = Field(default_factory=datetime.utcnow)
-    lang: LanguageTag = "und"  # idioma principal del documento (si aplica)
+    lang: LanguageTag = "und"
     meta: Dict[str, Any] = Field(default_factory=dict)
     pages: List[PageIR] = Field(default_factory=list)
     prov: Optional[Provenance] = None
 
     @staticmethod
     def new_id() -> str:
-        """Genera un identificador corto y humano-legible."""
+        """Genera un identificador corto y humano-legible (DOC-XXXX...)."""
         return f"DOC-{uuid.uuid4().hex[:12].upper()}"
 
 # -------------------------------------------------------------------
-# Extensiones opcionales (pensando en subsistemas siguientes)
-#   *No obligatorias para el Parser, pero útiles más adelante.*
+# Extensiones opcionales (para subsistemas posteriores)
 # -------------------------------------------------------------------
 
-# Tipos para spans/carriers de texto (útiles para normalización, IE, etc.)
 class CharSpan(BaseModel):
+    """Span de caracteres en un texto (start, end)."""
     start: int
     end: int
 
 class BlockRef(BaseModel):
+    """Referencia a un bloque dentro del documento (page/block_index)."""
     page_index: int
     block_index: int
     kind: BlockType
@@ -200,7 +210,7 @@ class BlockRef(BaseModel):
 class TextCarrier(BaseModel):
     """
     Contenedor ligero que vincula un texto a su procedencia física (página/bloque)
-    y a un span relativo, útil en normalización y en evaluaciones posteriores.
+    y a un span relativo, útil en normalización y evaluaciones posteriores.
     """
     text: str
     block_ref: Optional[BlockRef] = None
@@ -210,9 +220,6 @@ class TextCarrier(BaseModel):
 # -------------------------------------------------------------------
 # Chunks (Subsistema 2: HybridChunker)
 # -------------------------------------------------------------------
-from typing import Literal, Tuple
-import hashlib
-import time
 
 ChunkType = Literal["text", "table", "mixed"]
 
@@ -222,42 +229,39 @@ class ChunkIR(BaseModel):
 
     Campos clave
     ------------
-    - id: identificador estable (sha1 corto) sobre (doc_id, start, end, strategy)
-    - type: tipo dominante del contenido ("text" | "table" | "mixed")
-    - text: contenido textual del chunk (tablas serializadas a texto plano)
+    - chunk_id: identificador estable (sha1 corto) sobre (doc_id, start, end, strategy).
+    - type: tipo dominante del contenido ("text" | "table" | "mixed").
+    - text: contenido textual del chunk (tablas serializadas a texto plano).
     - meta: metadata operativa para trazabilidad y evaluación:
-        * page_span: (first_page_idx, last_page_idx) cubierto por el chunk
-        * block_span: (first_block_idx, last_block_idx) en la página de origen
-        * char_span: (start, end) relativo al buffer del chunker (si aplica)
-        * tokens_est: estimación de tokens (aprox.)
-        * reason: causa de corte (e.g., "max-reached-cut", "isolated-table", "eof")
-        * overlap_applied: solapamiento de caracteres aplicado
-        * strategy/version: identificadores del algoritmo de chunking
+        * page_span: (first_page_idx, last_page_idx).
+        * block_span: (first_block_idx, last_block_idx).
+        * char_span: (start, end) relativo al buffer del chunker.
+        * tokens_est: estimación de tokens.
+        * reason: causa de corte (ej. "max-reached-cut", "isolated-table", "eof").
+        * overlap_applied: solapamiento de caracteres aplicado.
+        * strategy/version: identificadores del algoritmo de chunking.
     """
-    id: str
+    chunk_id: str
     type: ChunkType = "text"
     text: str
     meta: Dict[str, Any] = Field(default_factory=dict)
 
     @staticmethod
     def new_id(doc_id: str, start: int, end: int, strategy: str = "hybrid-v1") -> str:
+        """Genera un identificador único reproducible por documento + offsets."""
         raw = f"{doc_id}:{start}:{end}:{strategy}"
         return hashlib.sha1(raw.encode("utf-8")).hexdigest()[:16]
 
     @staticmethod
     def estimate_tokens(text: str) -> int:
-        # Aproximación simple: 1 token ~ 4 chars (ajusta si usas otro tokenizer)
+        """Aproximación simple de tokens (1 token ≈ 4 chars)."""
         return max(1, int(len(text) / 4))
 
-
 class DocumentChunks(BaseModel):
-    """
-    Colección de chunks para un documento con metadatos de ejecución.
-    """
+    """Colección de chunks para un documento con metadatos de ejecución."""
     doc_id: str
     created_at: float = Field(default_factory=lambda: time.time())
     strategy: str = "hybrid-v1"
     version: str = "1.0"
     chunks: List[ChunkIR] = Field(default_factory=list)
     meta: Dict[str, Any] = Field(default_factory=dict)
-

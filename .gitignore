@@ -114,6 +114,7 @@ outputs_sentences/
 outputs_triples/
 outputs_mentions/
 output_entities/
+output_doc_topics/
 # Artefactos temporales
 tmp/
 .tmp/
