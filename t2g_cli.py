@@ -7,10 +7,10 @@ t2g_cli.py — CLI unificado del proyecto T2G
 Etapas implementadas hoy:
 - parse              Parser (PDF/DOCX/IMG) → DocumentIR(.json)
 - contextize-doc     Añade contexto global al IR
+- chunk              Segmenta IR+Topics en DocumentChunks (heredando contexto)
 - pipeline-yaml      Ejecuta pipeline declarativo en YAML
 
 Etapas preparadas (stub, no implementadas aún):
-- chunk              Segmenta IR en chunks (heredando contexto global)
 - contextize-chunks  Añade contexto local a chunks
 """
 
@@ -32,15 +32,14 @@ except ImportError:
 # Subsystems
 # ---------------------------------------------------------------------------
 from parser.parsers import Parser as DocParser
-from contextizer.contextizer import run_contextizer_on_doc  # procedural (doc-level)
-from contextizer.contextizer import TopicModelConfig
-# Stubs (para no romper imports; implementar en siguientes entregas)
-def run_chunker_stub(ir_path: str, outdir: str) -> None:
-    logger.warning("[CHUNKER] 🚧 Stub activo. Aún no implementado. Input: %s → %s", ir_path, outdir)
+from contextizer.contextizer import run_contextizer_on_doc, TopicModelConfig
+from contextizer.contextizer import run_contextizer_on_chunks
+from chunker import run as run_chunker, load_ir_with_topics, save_chunks
+from chunker.schemas import ChunkingConfig
 
+# Stubs (para no romper imports; implementar en siguientes entregas)
 def run_contextizer_on_chunks_stub(ch_path: str, cfg) -> None:
     logger.warning("[CONTEXTIZER-CHUNKS] 🚧 Stub activo. Aún no implementado. Input: %s", ch_path)
-
 
 # ---------------------------------------------------------------------------
 # Logging global
@@ -116,19 +115,37 @@ def cmd_contextize_doc(args: argparse.Namespace) -> None:
 
 
 def cmd_chunk(args: argparse.Namespace) -> None:
-    """Stub de chunker (no implementado aún)."""
-    if args.clean_outdir:
-        _maybe_clean(args.outdir, "chunk")
-    Path(args.outdir).mkdir(parents=True, exist_ok=True)
-    for ir in args.ir_files:
-        run_chunker_stub(ir, args.outdir)
+    """Ejecuta el HybridChunker sobre IR+Topics (outputs_doc_topics)."""
+    outdir = Path(getattr(args, "outdir", "outputs_chunks"))
+    if getattr(args, "clean_outdir", False):
+        _maybe_clean(outdir, "chunk")
+    outdir.mkdir(parents=True, exist_ok=True)
+
+    cfg = ChunkingConfig(
+        max_tokens=args.max_tokens,
+        min_chars=args.min_chars,
+        use_embeddings=args.use_embeddings,
+        embedding_model=args.embedding_model,
+        spacy_model=args.spacy_model,
+        seed=args.seed,
+    )
+
+    for ir_path in args.ir_files:
+        ir = load_ir_with_topics(ir_path)
+        chunks = run_chunker(ir, cfg)
+        save_chunks(chunks, outdir)
 
 
 def cmd_contextize_chunks(args: argparse.Namespace) -> None:
-    """Stub de contextizer-chunks (no implementado aún)."""
-    cfg = TopicModelConfig(embedding_model=args.embedding_model, seed=args.seed)
+    """Contextualización a nivel chunk (usa BERTopic + fallbacks)."""
+    cfg = TopicModelConfig(
+        embedding_model=args.embedding_model,
+        nr_topics=(None if args.nr_topics in (None, -1) else args.nr_topics),
+        seed=args.seed,
+        cache_dir=args.cache_dir if hasattr(args, "cache_dir") else None,
+    )
     for ch in args.chunk_files:
-        run_contextizer_on_chunks_stub(ch, cfg)
+        run_contextizer_on_chunks(ch, cfg)
 
 # ============================================================================
 # Pipeline YAML
@@ -172,6 +189,12 @@ def cmd_pipeline_yaml(args: argparse.Namespace) -> None:
                 ir_files=ir_files,
                 outdir=sargs.get("outdir", "outputs_chunks"),
                 clean_outdir=sargs.get("clean_outdir", False),
+                max_tokens=sargs.get("max_tokens", 2048),
+                min_chars=sargs.get("min_chars", 280),
+                use_embeddings=sargs.get("use_embeddings", True),
+                embedding_model=sargs.get("embedding_model", "all-MiniLM-L6-v2"),
+                spacy_model=sargs.get("spacy_model", "es_core_news_sm"),
+                seed=sargs.get("seed", 42),
             )
             cmd_chunk(ns)
 
@@ -180,7 +203,10 @@ def cmd_pipeline_yaml(args: argparse.Namespace) -> None:
             ns = argparse.Namespace(
                 chunk_files=chunk_files,
                 embedding_model=sargs.get("embedding_model", "all-MiniLM-L6-v2"),
+                nr_topics=sargs.get("nr_topics", None),       
                 seed=sargs.get("seed", 42),
+                cache_dir=sargs.get("cache_dir", None),       
+                outdir=sargs.get("outdir", "outputs_chunks")
             )
             cmd_contextize_chunks(ns)
 
@@ -205,23 +231,32 @@ def build_t2g_cli() -> argparse.ArgumentParser:
     c.add_argument("--nr-topics", type=int, default=None, dest="nr_topics")
     c.add_argument("--seed", type=int, default=42)
     c.add_argument("--cache-dir", default=None)
-    c.add_argument("--outdir", default="outputs_doc_topics")  # ← faltaba
+    c.add_argument("--outdir", default="outputs_doc_topics")
     c.add_argument("--clean-outdir", action="store_true")
     c.set_defaults(func=cmd_contextize_doc)
 
-    # chunk (stub)
-    ch = cmds.add_parser("chunk", help="🚧 Stub — segmenta IR en chunks (no implementado aún)")
+    # chunk
+    ch = cmds.add_parser("chunk", help="Segmenta IR+Topics en chunks")
     ch.add_argument("ir_files", nargs="+")
     ch.add_argument("--outdir", default="outputs_chunks")
     ch.add_argument("--clean-outdir", action="store_true")
+    ch.add_argument("--max-tokens", type=int, default=2048)
+    ch.add_argument("--min-chars", type=int, default=280)
+    ch.add_argument("--use-embeddings", action="store_true", default=True)
+    ch.add_argument("--embedding-model", default="all-MiniLM-L6-v2")
+    ch.add_argument("--spacy-model", default="es_core_news_sm")
+    ch.add_argument("--seed", type=int, default=42)
     ch.set_defaults(func=cmd_chunk)
 
     # contextize-chunks (stub)
-    cc = cmds.add_parser("contextize-chunks", help="🚧 Stub — añade contexto local a chunks (no implementado aún)")
+    cc = cmds.add_parser("contextize-chunks", help="Añade contexto local a chunks")
     cc.add_argument("chunk_files", nargs="+")
     cc.add_argument("--embedding-model", default="all-MiniLM-L6-v2")
+    cc.add_argument("--nr-topics", type=int, default=None, dest="nr_topics")
     cc.add_argument("--seed", type=int, default=42)
+    cc.add_argument("--cache-dir", default=None)
     cc.set_defaults(func=cmd_contextize_chunks)
+
 
     # pipeline-yaml
     py = cmds.add_parser("pipeline-yaml", help="Ejecuta pipeline desde YAML")

@@ -20,5 +20,24 @@ stages:
       embedding_model: "all-MiniLM-L6-v2"
       nr_topics: null     # null → None
       seed: 42
-      #cache_dir: ".cache_embeddings"   # opcional, si quieres caching
       outdir: "outputs_doc_topics"
+
+  - name: chunk
+    args:
+      clean_outdir: true
+      ir_glob: "outputs_doc_topics/*.json"
+      outdir: "outputs_chunks"
+      max_tokens: 2048
+      min_chars: 280
+      use_embeddings: true
+      embedding_model: "all-MiniLM-L6-v2"
+      spacy_model: "es_core_news_sm"
+      seed: 42
+
+  - name: contextize-chunks
+    args:
+      chunks_glob: "outputs_chunks/*.json"
+      embedding_model: "all-MiniLM-L6-v2"
+      nr_topics: null
+      seed: 42
+      outdir: "outputs_chunks"   # sobrescribe en sitio

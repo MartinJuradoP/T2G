@@ -27,8 +27,8 @@
 | -: | -------------------------------- | --------------------------------------------------------------------------- | ------------------- | ------------------------ | ------ |
 |  1 | **Parser**                       | Genera **IR JSON** homogénea con metadatos y layout                         | Doc (PDF/DOCX/IMG)  | `DocumentIR` JSON        | ✅      |
 |  2 | **BERTopic Contextizer (doc)**   | Asigna **tópicos y keywords globales** a nivel documento                    | `DocumentIR`        | `DocumentIR+Topics` JSON | ✅      |
-|  3 | **HybridChunker**                | Segmenta documento en **chunks semánticos estables (≤2048 tokens)**         | `DocumentIR+Topics` | `DocumentChunks` JSON    | 🔜     |
-|  4 | **BERTopic Contextizer (chunk)** | Asigna tópicos locales a cada chunk (subtemas); enlaza con tópicos globales | `DocumentChunks`    | `Chunks+Topics` JSON     | 🔜     |
+|  3 | **HybridChunker**                | Segmenta documento en **chunks semánticos estables (≤2048 tokens)**         | `DocumentIR+Topics` | `DocumentChunks` JSON    | ✅     |
+|  4 | **BERTopic Contextizer (chunk)** | Asigna tópicos locales a cada chunk (subtemas); enlaza con tópicos globales | `DocumentChunks`    | `Chunks+Topics` JSON     | ✅     |
 |  5 | **Adaptive Schema Selector**     | Define dinámicamente entidades relevantes según contexto                    | `Chunks+Topics`     | `SchemaSelection` JSON   | 🔜     |
 |  6 | **Mentions (NER/RE)**            | Detecta menciones condicionadas por tópicos                                 | `Chunks+Topics`     | `Mentions` JSON          | 🔜     |
 |  7 | **Clustering de Menciones**      | Agrupa spans en clusters semánticos                                         | `Mentions` JSON     | `Clusters` JSON          | 🔜     |
@@ -118,16 +118,46 @@ project_T2G/
 
 **Qué hace:**
 
-* Calcula embeddings globales con **SentenceTransformers (`all-MiniLM-L6-v2`)**.
-* Descubre tópicos con **BERTopic**.
-* Si hay pocos chunks:
+**Qué hace:**
 
-  * 0–1 → topic único (singleton).
-  * 2 → fallback basado en frecuencia de términos.
-  * 3+ → BERTopic normal.
-* Enriquecimiento agregado a `meta.topics_doc`:
+* **1. Extracción de texto**:
+  Toma todos los bloques textuales del documento (párrafos, headings, tablas OCR).
+  Preprocesa eliminando espacios raros, stopwords multilingües y normalizando tokens.
 
-  * `n_topics`, `keywords_global`, `exemplar`, `outlier_ratio`.
+* **2. Embeddings globales**:
+  Cada bloque se convierte en un vector usando **SentenceTransformers** (`all-MiniLM-L6-v2`).
+  Estos embeddings capturan similitud semántica más allá de palabras exactas.
+
+* **3. Clustering de tópicos con BERTopic**:
+  Los embeddings se reducen con **UMAP** y se agrupan con **HDBSCAN**.
+
+  * **UMAP** → baja dimensión para preservar estructura semántica.
+  * **HDBSCAN** → encuentra clusters de tamaño variable sin fijar `k`.
+  * **BERTopic** → asigna palabras clave representativas a cada cluster.
+
+* **4. Heurística adaptativa (corpus pequeño)**:
+  Como documentos pueden ser muy cortos, aplicamos **fallbacks** para evitar errores o ruido:
+
+  * **0–1 bloques** → se asigna un único topic (`singleton`), con keywords derivadas por frecuencia.
+  * **2 bloques** → no hay suficiente masa para clustering; se aplica **TF-based fallback** (frecuencia de términos relevantes).
+  * **≥3 bloques** → se ejecuta BERTopic normal con embeddings + clustering.
+    Esto asegura que siempre exista al menos un `topic` incluso en documentos mínimos.
+
+* **5. Post-procesamiento y limpieza**:
+  Para cada cluster (topic) se selecciona:
+
+  * `exemplar`: bloque de texto más representativo.
+  * `keywords`: lista de palabras clave filtradas (removiendo stopwords, duplicados, ruido corto).
+  * `count`: número de bloques asignados.
+    Además se calculan métricas globales como `outlier_ratio` (proporción de bloques no asignados a ningún cluster válido).
+
+**Enriquecimiento agregado a `meta.topics_doc`:**
+
+* `n_topics`: número total de tópicos encontrados o inferidos.
+* `keywords_global`: lista unificada de keywords más frecuentes en todo el documento.
+* `topics`: listado detallado de cada topic con `id`, `count`, `exemplar`, `keywords`.
+* `reason`: explica el modo usado (`doc-level`, `doc-fallback-small`, `doc-fallback-error`).
+* `outlier_ratio`: porcentaje de bloques descartados como outliers (cuando aplica).
 
 **Ejemplo de salida:**
 
@@ -155,15 +185,101 @@ project_T2G/
 
 ---
 
-### 3) HybridChunker 🔜
+#### 3) HybridChunker ✅
 
-* Divide documento en **chunks semánticos ≤2048 tokens**.
-* Hereda `topics_doc` para mantener coherencia.
+**Entrada:** `DocumentIR+Topics` (`outputs_doc_topics/*.json`)
+**Salida:** `DocumentChunks` (`outputs_chunks/*.json`)
 
-### 4) BERTopic Contextizer (chunk-level) 🔜
+**Qué hace (paso a paso):**
 
-* Asigna tópicos específicos a cada chunk.
-* Permite detectar **subtemas** y transferir contexto.
+1. **Extracción de bloques base**
+
+   * Toma todos los bloques textuales del `DocumentIR`.
+   * Cada bloque conserva trazabilidad (`page_number`, `block_indices`) para poder mapear chunks a posiciones exactas en el documento.
+
+2. **Segmentación semántica híbrida**
+   Se combinan varias estrategias para dividir el documento en **chunks coherentes de ≤2048 tokens** (óptimo para LLMs):
+
+   * **Reglas de headings**: patrones típicos (`Introducción`, `Métodos`, `Conclusiones`, etc.) detectados vía regex.
+   * **spaCy sentence boundaries**: segmenta párrafos largos en oraciones bien definidas.
+   * **Embeddings (SentenceTransformers)**: evalúa cohesión semántica entre bloques y decide si agrupar o dividir.
+     → El resultado son **chunks “estables”**: suficientemente largos para contexto, pero sin sobrepasar el límite de tokens.
+
+3. **Herencia de contexto (`topic_hints`)**
+
+   * Cada chunk hereda información del doc-level contextizer (`topic_ids`, `keywords_global`, `topic_affinity`).
+   * Esto asegura **consistencia semántica vertical**: lo que el documento sabe a nivel global está presente también en cada chunk.
+
+4. **Cálculo de métricas locales**
+   Para evaluar la calidad de los chunks, se añaden scores:
+
+   * `cohesion_vs_doc`: similitud entre el chunk y el embedding global del documento (cercanía semántica).
+   * `max_redundancy`: medida de solapamiento con otros chunks (evita duplicados o repetición excesiva).
+
+5. **Serialización robusta**
+
+   * Cada chunk se guarda con `chunk_id` único, trazabilidad al documento (`doc_id`), orden secuencial y `source_spans`.
+   * Se asegura compatibilidad JSON (ej. timestamps en ISO 8601).
+
+* **Ejemplo de salida (simplificado):**
+
+```json
+{
+  "chunk_id": "DOC-123_0001",
+  "text": "Complicaciones Asociadas...",
+  "topic_hints": {
+    "inherited_keywords": ["diabetes","tratamiento"],
+    "inherited_topic_ids": [0,1]
+  },
+  "scores": {
+    "cohesion_vs_doc": 0.82,
+    "max_redundancy": 0.59
+  }
+}
+```
+
+---
+
+#### 4) BERTopic Contextizer (chunk-level) ✅
+
+* **Entrada:** `DocumentChunks`
+
+* **Salida:** `Chunks+Topics`
+
+* **Qué hace:**
+
+  * Recalcula embeddings para cada chunk.
+  * Intenta descubrir **subtemas locales** con BERTopic.
+  * **Lógica de fallback**:
+
+    * `n_samples = 0` → no hay texto, se omite.
+    * `n_samples < 5` → usa fallback por frecuencia de términos.
+    * `n_samples ≥ 5` → corre BERTopic normal.
+  * Cada chunk queda enriquecido con:
+
+    * `topic` (id, keywords, prob).
+    * `topic_hints` (heredados de doc-level).
+
+* **Ejemplo de salida (fallback):**
+
+```json
+"topics_chunks": {
+  "reason": "chunk-fallback-small",
+  "n_samples": 3,
+  "n_topics": 1,
+  "keywords_global": ["diabetes","tratamiento","insulina"],
+  "topics": [
+    {
+      "topic_id": 0,
+      "count": 3,
+      "exemplar": "Diabetes Tipo 2: Un enfoque clínico...",
+      "keywords": ["diabetes","complicaciones","tratamiento"]
+    }
+  ]
+}
+```
+
+---
 
 ### 5) Adaptive Schema Selector 🔜
 
@@ -208,6 +324,25 @@ stages:
       nr_topics: null
       seed: 42
       outdir: "outputs_doc_topics"
+
+  - name: chunk
+    args:
+      clean_outdir: true
+      ir_glob: "outputs_doc_topics/*.json"
+      embedding_model: "all-MiniLM-L6-v2"
+      spacy_model: "es_core_news_sm"
+      max_tokens: 2048
+      min_chars: 280
+      outdir: "outputs_chunks"
+
+  - name: contextize-chunks
+    args:
+      clean_outdir: false
+      ir_glob: "outputs_chunks/*.json"
+      embedding_model: "all-MiniLM-L6-v2"
+      nr_topics: null
+      seed: 42
+      outdir: "outputs_chunks"
 ```
 
 Ejecutar:
@@ -233,11 +368,17 @@ python t2g_cli.py pipeline-yaml
 * `topic_size_stats`: distribución (min, mediana, p95).
 * `keywords_diversity`: diversidad de keywords únicas.
 
-### Próximos subsistemas 🔜
+### HybridChunker**
 
-* **HybridChunker**: `chunk_length_stats`.
-* **Mentions**: `precision/recall vs golden`.
-* **Normalization**: % de entidades deduplicadas.
+  * `chunk_length_stats`: distribución de tamaño en caracteres/tokens.
+  * `cohesion_vs_doc`: similitud coseno chunk ↔ doc.
+  * `max_redundancy`: similitud máx entre chunks (para evitar duplicados).
+
+### Contextizer (chunk-level)**
+
+  * `coverage`: % de chunks con topic asignado.
+  * `fallback_rate`: % de documentos donde se usó fallback vs BERTopic.
+  * `topic_size_stats`: tamaño medio de clusters locales.
 
 ---
 

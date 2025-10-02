@@ -317,7 +317,7 @@ def run_contextizer_on_chunks(chunk_path: str, cfg: TopicModelConfig) -> None:
         return
 
     # Caso 1–2 chunks: fallback robusto (evita edge-cases de UMAP/HDBSCAN)
-    if n_samples < 3:
+    if n_samples < 5:
         logger.info("[Contextizer-CHUNKS] Pocas muestras (n=%d). Fallback de frecuencia.", n_samples)
         keywords = _top_keywords_freq(texts, stopwords, cfg.fallback_max_keywords, cfg.min_token_len)
         for c in chunks:
