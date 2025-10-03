@@ -443,6 +443,7 @@ stages:
       nr_topics: null
       seed: 42
       outdir: "outputs_chunks"
+      
   - name: schema-select
     args:
       chunks_glob: "outputs_chunks/*.json"
