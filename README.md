@@ -443,6 +443,17 @@ stages:
       nr_topics: null
       seed: 42
       outdir: "outputs_chunks"
+  - name: schema-select
+    args:
+      chunks_glob: "outputs_chunks/*.json"
+      outdir: "outputs_schema"
+      clean_outdir: true
+      alpha_kw: 0.6
+      beta_emb: 0.3
+      gamma_prior: 0.1
+      ambig_margin: 0.08
+      topk_domains: 2
+      topk_entity_types: 5
 ```
 
 Ejecutar:
