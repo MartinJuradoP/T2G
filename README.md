@@ -43,24 +43,32 @@
 
 ```bash
 project_T2G/
-├── docs/                   # Documentos de prueba
-├── parser/                 # Subsistema Parser
+├── docs/                      # Documentos de prueba
+├── parser/                    # Subsistema Parser
 │   ├── parsers.py
 │   ├── metrics.py
 │   ├── schemas.py
 │   └── __init__.py
-├── contextizer/            # Subsistema Contextizer
+├── contextizer/               # Subsistema Contextizer
 │   ├── contextizer.py
 │   ├── metrics.py
 │   ├── models.py
 │   ├── utils.py
 │   ├── schemas.py
 │   └── __init__.py
+├── schema_selector/           # Adaptive Schema Selector 🔥
+│   ├── registry.py            # Ontologías y dominios (medical, legal, etc.)
+│   ├── schemas.py             # Contratos Pydantic + Config
+│   ├── selector.py            # Lógica de scoring y selección
+│   ├── utils.py               # Funciones auxiliares (similitud, normalización)
+│   └── __init__.py
 ├── pipelines/
 │   └── pipeline.yaml
-├── outputs_ir/             # Salidas: DocumentIR
-├── outputs_doc_topics/     # Salidas: IR+Topics
-├── t2g_cli.py              # CLI unificado
+├── outputs_ir/                # Salidas: DocumentIR
+├── outputs_doc_topics/        # Salidas: IR+Topics
+├── outputs_chunks/            # Salidas: Chunks
+├── outputs_schema/            # Salidas: SchemaSelection
+├── t2g_cli.py                 # CLI unificado
 ├── requirements.txt
 └── README.md
 ```
@@ -115,8 +123,6 @@ project_T2G/
 
 **Entrada:** `DocumentIR` (`outputs_ir/*.json`)
 **Salida:** `DocumentIR+Topics` (`outputs_doc_topics/*.json`)
-
-**Qué hace:**
 
 **Qué hace:**
 
@@ -281,9 +287,89 @@ project_T2G/
 
 ---
 
-### 5) Adaptive Schema Selector 🔜
+### 5) Adaptive Schema Selector ✅
 
-* Define dinámicamente qué entidades extraer según tópicos.
+**Entrada:** `Chunks+Topics` (`outputs_chunks/*.json`)
+**Salida:** `SchemaSelection` (`outputs_schema/*.json`)
+
+**Qué hace:**
+
+El **Adaptive Schema Selector** determina dinámicamente qué **dominios de entidades** (ej. médico, legal, financiero, genérico) son relevantes para cada documento y chunk. Esto evita extraer entidades irrelevantes y mejora la **precisión** del grafo.
+
+1. **Registro de dominios (`registry.py`)**
+   Cada dominio contiene:
+
+   * Entidades (`EntityTypeDef`) con atributos (ej. `Disease`, `Treatment`).
+   * Relaciones (`RelationTypeDef`) entre entidades.
+   * Aliases y vocabulario específico (ej. `"enfermedad"`, `"patología"` para `Disease`).
+
+2. **Extracción de señales del documento/chunk**
+
+   * **Keywords**: se buscan overlaps entre tokens y aliases.
+   * **Embeddings**: se calcula similitud coseno entre centroides del texto y embeddings predefinidos de etiquetas (`label_vecs`).
+   * **Priors**: se aplican pesos de confianza inicial (ej. `generic` siempre se incluye con peso bajo).
+
+3. **Fórmula de scoring (por dominio):**
+
+   Para cada dominio (d):
+
+$$
+\text{score}(d) = \alpha \cdot S_{\text{kw}}(d) + \beta \cdot S_{\text{emb}}(d) + \gamma \cdot P(d)
+$$
+
+Donde:
+
+* $S_{\text{kw}}$: score normalizado por overlap de keywords.
+* $S_{\text{emb}}$: similitud coseno entre embeddings.
+* $P(d)$: prior asignado al dominio.
+* $\alpha, \beta, \gamma$ → hiperparámetros configurables en `SelectorConfig`.
+
+**Ejemplo default:**
+
+$\alpha = 0.6, \beta = 0.3, \gamma = 0.1$ → más peso a keywords, menos a embeddings y priors.
+
+4. **Selección final**
+
+   * Se ordenan los dominios por score.
+   * Se descartan dominios con score < `min_topic_conf`.
+   * Se seleccionan los `top-k` dominios (por config).
+   * Se marca `ambiguous=True` si la diferencia entre primer y segundo dominio < `ambiguity_threshold`.
+   * Siempre se incluye el dominio **genérico** como fallback (`allow_fallback_generic=True`).
+
+---
+
+**Ejemplo de salida (simplificado):**
+
+```json
+{
+  "doc": {
+    "doc_id": "DOC-123",
+    "top_domains": ["medical"],
+    "ambiguous": false,
+    "domain_scores": [
+      {"domain":"medical","score":0.18,"evidence":[{"kind":"keyword","detail":{"overlap":2,"kw_score":0.2}},{"kind":"stat","detail":{"alpha":0.6,"beta":0.3}}]},
+      {"domain":"legal","score":0.05,"evidence":[{"kind":"keyword","detail":{"overlap":0,"kw_score":0.0}}]}
+    ]
+  },
+  "chunks": [
+    {
+      "chunk_id": "DOC-123_0001",
+      "top_domain": "medical",
+      "ambiguous": false,
+      "domain_scores": [...]
+    }
+  ],
+  "meta": {
+    "alpha": 0.6,
+    "beta": 0.3,
+    "gamma": 0.1,
+    "always_include": ["generic"],
+    "ambiguity_threshold": 0.1
+  }
+}
+```
+
+---
 
 ### 6) Mentions (NER/RE) 🔜
 
@@ -296,6 +382,20 @@ project_T2G/
 
 ---
 
+
+# 📋 Flujo de información en T2G (Contrado de datos)
+
+
+| Etapa / Subsistema                  | **Entrada (qué toma)**                  | **Salida (qué agrega / construye)**                                                                               |
+| ----------------------------------- | --------------------------------------- | ----------------------------------------------------------------------------------------------------------------- |
+| **1. Parser** (Doc → IR)            | Documento bruto (PDF, DOCX, IMG)        | `DocumentIR`: texto por bloques, tablas, metadatos (`mime`, `pages`, `sha256`, `source_path`).                    |
+| **2. Contextizer (doc-level)**      | `DocumentIR.pages.blocks.text`          | `meta.topics_doc`: tópicos globales, keywords generales, ejemplares, `outlier_ratio`.                             |
+| **3. HybridChunker**                | `DocumentIR+Topics`                     | `chunks[*]`: segmentos ≤2048 tokens. Heredan `topic_hints` + métricas (`cohesion`, `redundancy`).                 |
+| **4. Contextizer (chunk-level)**    | `chunks.text` + `topic_hints` heredados | `chunks[*].topic`: tópico local con `topic_id`, `keywords`, `prob` + `meta.topics_chunks`.                        |
+| **5. Schema Selector (adaptativo)** | `chunks+topics` + `registry`            | `SchemaSelection`: dominios relevantes por doc y chunk + `evidence_trace` (keywords, embeddings, priors, scores). |
+| **6. Mentions (NER/RE)**            | `chunks+schema_selection`               | `Mentions`: spans de entidades y relaciones condicionadas a los dominios detectados.                              |
+
+---
 ## 📂 Pipeline declarativo (YAML)
 
 Archivo: `pipelines/pipeline.yaml`
@@ -355,13 +455,13 @@ python t2g_cli.py pipeline-yaml
 
 ## 📊 Métricas por subsistema
 
-### Parser ✅
+### Parser 
 
 * `percent_docs_ok`: éxito de parseo por lote.
 * `layout_loss`: pérdida de estructura.
 * `table_consistency`: tablas detectadas vs esperadas.
 
-### Contextizer (doc-level) ✅
+### Contextizer (doc-level) 
 
 * `coverage`: proporción de chunks asignados a algún tópico.
 * `outlier_rate`: ratio de outliers vs asignaciones válidas.
@@ -379,6 +479,13 @@ python t2g_cli.py pipeline-yaml
   * `coverage`: % de chunks con topic asignado.
   * `fallback_rate`: % de documentos donde se usó fallback vs BERTopic.
   * `topic_size_stats`: tamaño medio de clusters locales.
+
+### Adaptive Schema Selector**
+
+  * `domain_score_distribution`: histograma de scores por dominio.
+  * `ambiguity_rate`: % de documentos/chunks con `ambiguous=True`.
+  * `coverage_domains`: promedio de dominios relevantes por documento.
+  * `evidence_trace`: lista de evidencias usadas para cada score (auditoría).
 
 ---
 

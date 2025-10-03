@@ -36,6 +36,11 @@ from contextizer.contextizer import run_contextizer_on_doc, TopicModelConfig
 from contextizer.contextizer import run_contextizer_on_chunks
 from chunker import run as run_chunker, load_ir_with_topics, save_chunks
 from chunker.schemas import ChunkingConfig
+# Adaptive Schema Selector
+from schema_selector.selector import select_schemas
+from schema_selector.registry import REGISTRY
+from schema_selector.schemas import SelectorConfig
+
 
 # Stubs (para no romper imports; implementar en siguientes entregas)
 def run_contextizer_on_chunks_stub(ch_path: str, cfg) -> None:
@@ -147,6 +152,48 @@ def cmd_contextize_chunks(args: argparse.Namespace) -> None:
     for ch in args.chunk_files:
         run_contextizer_on_chunks(ch, cfg)
 
+
+def cmd_schema_select(args: argparse.Namespace) -> None:
+    """
+    Ejecuta Adaptive Schema Selector (Etapa 5).
+    - Toma DocumentChunks con topics (outputs_chunks).
+    - Genera SchemaSelection JSON (outputs_schema).
+    """
+    outdir = Path(getattr(args, "outdir", "outputs_schema"))
+    if getattr(args, "clean_outdir", False):
+        _maybe_clean(outdir, "schema-select")
+    outdir.mkdir(parents=True, exist_ok=True)
+
+    cfg = SelectorConfig(
+        alpha_kw=args.alpha_kw,
+        beta_emb=args.beta_emb,
+        gamma_prior=args.gamma_prior,
+        ambig_margin=args.ambig_margin,
+        topk_domains=args.topk_domains,
+        topk_entity_types=args.topk_entity_types,
+    )
+
+    for ch_path in args.chunk_files:
+        ch_path = Path(ch_path)
+        if not ch_path.exists():
+            logger.warning("[SCHEMA-SELECT] archivo no encontrado: %s", ch_path)
+            continue
+
+        # cargar chunks
+        doc = json.loads(ch_path.read_text(encoding="utf-8"))
+
+        # ejecutar selector
+        schema_sel = select_schemas(doc, registry=REGISTRY, config=cfg)
+
+        # guardar salida
+        out_path = outdir / f"{doc.get('doc_id','UNKNOWN')}_schema.json"
+        out_path.write_text(
+            json.dumps(schema_sel.model_dump(mode="json"), indent=2, ensure_ascii=False),
+            encoding="utf-8"
+        )
+        logger.info("[SCHEMA-SELECT OK] %s → %s", ch_path, out_path)
+
+
 # ============================================================================
 # Pipeline YAML
 # ============================================================================
@@ -209,6 +256,22 @@ def cmd_pipeline_yaml(args: argparse.Namespace) -> None:
                 outdir=sargs.get("outdir", "outputs_chunks")
             )
             cmd_contextize_chunks(ns)
+        
+        elif name == "schema-select":
+            chunk_files = _expand_inputs(sargs, "chunks_glob", "chunk_files")
+            ns = argparse.Namespace(
+                chunk_files=chunk_files,
+                outdir=sargs.get("outdir", "outputs_schema"),
+                clean_outdir=sargs.get("clean_outdir", False),
+                alpha_kw=sargs.get("alpha_kw", 0.6),
+                beta_emb=sargs.get("beta_emb", 0.3),
+                gamma_prior=sargs.get("gamma_prior", 0.1),
+                ambig_margin=sargs.get("ambig_margin", 0.08),
+                topk_domains=sargs.get("topk_domains", 2),
+                topk_entity_types=sargs.get("topk_entity_types", 5),
+            )
+            cmd_schema_select(ns)
+
 
 # ============================================================================
 # CLI Entrypoint
@@ -257,6 +320,18 @@ def build_t2g_cli() -> argparse.ArgumentParser:
     cc.add_argument("--cache-dir", default=None)
     cc.set_defaults(func=cmd_contextize_chunks)
 
+    # schema-select
+    ss = cmds.add_parser("schema-select", help="Selecciona esquemas adaptativos (Adaptive Schema Selector)")
+    ss.add_argument("chunk_files", nargs="+", help="Archivos JSON de DocumentChunks")
+    ss.add_argument("--outdir", default="outputs_schema", help="Directorio de salida")
+    ss.add_argument("--clean-outdir", action="store_true", help="Limpiar directorio antes de generar salida")
+    ss.add_argument("--alpha-kw", type=float, default=0.6, help="Peso de keywords")
+    ss.add_argument("--beta-emb", type=float, default=0.3, help="Peso de embeddings")
+    ss.add_argument("--gamma-prior", type=float, default=0.1, help="Peso de priors")
+    ss.add_argument("--ambig-margin", type=float, default=0.08, help="Margen de ambigüedad para marcar empate")
+    ss.add_argument("--topk-domains", type=int, default=2, help="N dominios a reportar en doc-level")
+    ss.add_argument("--topk-entity-types", type=int, default=5, help="N entity types a reportar por dominio")
+    ss.set_defaults(func=cmd_schema_select)
 
     # pipeline-yaml
     py = cmds.add_parser("pipeline-yaml", help="Ejecuta pipeline desde YAML")
