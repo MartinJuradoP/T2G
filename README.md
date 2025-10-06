@@ -224,9 +224,9 @@ project_T2G/
    * Esto asegura **consistencia semántica vertical**: lo que el documento conoce a nivel global se transfiere a los fragmentos locales.
    * La afinidad entre el chunk y los tópicos globales se calcula mediante una mezcla semántico-léxica:
 
-     ```math
+     $$
      \text{topic\_affinity\_blend}(c, t) = \alpha \cdot \cos(\vec{c}, \vec{t}) + (1 - \alpha) \cdot J(c, t)
-     ```
+     $$
 
      Donde:
 
@@ -237,28 +237,28 @@ project_T2G/
      Esta combinación hace al sistema más robusto frente a textos cortos (tweets, cláusulas legales o notas clínicas) donde la semántica sola puede ser insuficiente.
 
 4. **Cálculo de métricas locales**
+   
    Para evaluar la calidad y la coherencia de los chunks, se calculan métricas cuantitativas:
 
    * `cohesion_vs_doc`: mide la similitud coseno entre el embedding del chunk y el embedding promedio del documento.
      Representa **qué tan bien el fragmento conserva el contexto global**.
 
-     ```math
+     $$
      \text{cohesion\_vs\_doc}(c_i) = \cos(\vec{c_i}, \bar{\vec{D}})
-     ```
+     $$
 
    * `max_redundancy`: mide la similitud máxima del chunk con cualquier otro chunk dentro del mismo documento.
      Detecta **fragmentos repetitivos o duplicados**.
 
-     ```math
+     $$
      \text{max\_redundancy}(c_i) = \max_{j \neq i} \cos(\vec{c_i}, \vec{c_j})
-     ```
+     $$
 
    * `redundancy_norm`: versión normalizada de la redundancia, que ajusta el valor según el tamaño relativo del fragmento.
 
-     ```math
-     \text{redundancy\_norm}(c_i) =
-     \text{max\_redundancy}(c_i) \times \frac{\text{len}(c_i)}{\text{avg\_len(chunks)}}
-     ```
+     $$
+     \text{redundancy\_norm}(c_i) = \text{max\_redundancy}(c_i) \times \frac{\text{len}(c_i)}{\text{avg\_len(chunks)}}
+     $$
 
      Esto penaliza más a los chunks **largos y redundantes**, y reduce el impacto de los fragmentos **cortos pero similares**.
      En textos como contratos, reseñas o tweets, mejora la detección de contenido **repetitivo** versus **informativo**.
@@ -266,18 +266,18 @@ project_T2G/
    * `novelty`: mide la proporción de información nueva que aporta cada fragmento.
      Es complementaria a la redundancia.
 
-     ```math
+     $$
      \text{novelty}(c_i) = 1 - \text{max\_redundancy}(c_i)
-     ```
+     $$
 
      Un valor alto de `novelty` indica que el chunk aporta **contexto único o evidencia nueva**.
 
    * `chunk_health`: métrica compuesta que pondera la cohesión y la novedad penalizando la redundancia.
      Resume la **salud semántica del fragmento**.
 
-     ```math
+     $$
      \text{chunk\_health}(c_i) = \text{cohesion\_vs\_doc}(c_i) \times (1 - \text{max\_redundancy}(c_i))
-     ```
+     $$
 
      Este score puede usarse en etapas posteriores (por ejemplo, el **Adaptive Schema Selector**) para **ponderar o filtrar chunks** según su calidad semántica.
 
