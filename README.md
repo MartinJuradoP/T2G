@@ -217,10 +217,24 @@ project_T2G/
    * Esto asegura **consistencia semántica vertical**: lo que el documento sabe a nivel global está presente también en cada chunk.
 
 4. **Cálculo de métricas locales**
-   Para evaluar la calidad de los chunks, se añaden scores:
+   Para evaluar la calidad y la coherencia de los chunks, se calculan métricas ligeras:
 
-   * `cohesion_vs_doc`: similitud entre el chunk y el embedding global del documento (cercanía semántica).
-   * `max_redundancy`: medida de solapamiento con otros chunks (evita duplicados o repetición excesiva).
+   * `cohesion_vs_doc`: mide la similitud coseno entre el embedding del chunk y el embedding medio del documento.  
+     Representa **qué tan bien se mantiene el contexto global** dentro del fragmento.
+
+   * `max_redundancy`: mide la similitud máxima del chunk con cualquier otro chunk.  
+     Permite detectar **fragmentos duplicados o demasiado parecidos** dentro del mismo documento.
+
+   * `redundancy_norm`: versión normalizada de la redundancia, que ajusta por el tamaño relativo del chunk.  
+     Se define como:
+
+     ```math
+     \text{redundancy\_norm} = \text{max\_redundancy} \times \frac{\text{len(chunk)}}{\text{avg\_len\_chunks}}
+     ```
+
+     Esto penaliza más a los chunks **largos y redundantes**, mientras que reduce el peso de los **fragmentos cortos** aunque sean similares.  
+     En textos como contratos, reseñas o tweets, permite distinguir entre contenido **repetitivo** y **informativo**.
+
 
 5. **Serialización robusta**
 
@@ -393,7 +407,7 @@ $\alpha = 0.6, \beta = 0.3, \gamma = 0.1$ → más peso a keywords, menos a embe
 | **3. HybridChunker**                | `DocumentIR+Topics`                     | `chunks[*]`: segmentos ≤2048 tokens. Heredan `topic_hints` + métricas (`cohesion`, `redundancy`).                 |
 | **4. Contextizer (chunk-level)**    | `chunks.text` + `topic_hints` heredados | `chunks[*].topic`: tópico local con `topic_id`, `keywords`, `prob` + `meta.topics_chunks`.                        |
 | **5. Schema Selector (adaptativo)** | `chunks+topics` + `registry`            | `SchemaSelection`: dominios relevantes por doc y chunk + `evidence_trace` (keywords, embeddings, priors, scores). |
-| **6. Mentions (NER/RE)**            | `chunks+schema_selection`               | `Mentions`: spans de entidades y relaciones condicionadas a los dominios detectados.                              |
+                            |
 
 ---
 ## 📂 Pipeline declarativo (YAML)
@@ -482,9 +496,12 @@ python t2g_cli.py pipeline-yaml
 
 ### HybridChunker**
 
-  * `chunk_length_stats`: distribución de tamaño en caracteres/tokens.
-  * `cohesion_vs_doc`: similitud coseno chunk ↔ doc.
-  * `max_redundancy`: similitud máx entre chunks (para evitar duplicados).
+* `chunk_length_stats`: distribución de tamaño en caracteres/tokens.
+* `cohesion_vs_doc`: similitud coseno chunk ↔ doc (coherencia semántica global).
+* `max_redundancy`: similitud máxima entre chunks (redundancia bruta).
+* `redundancy_norm`: redundancia normalizada según longitud media del documento  
+  *(penaliza fragmentos largos y repetitivos)*.
+
 
 ### Contextizer (chunk-level)**
 

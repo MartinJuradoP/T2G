@@ -1,20 +1,23 @@
 # -*- coding: utf-8 -*-
 """
-chunker.py — HybridChunker: regla + semántica + límites de longitud
+chunker.py — HybridChunker: regla + semántica + límites de longitud (versión mejorada, compatible)
 
 Estrategia híbrida:
 1) Pre-segmentación por estructura (headings/listas/bloques).
-2) Refinamiento por oraciones (spaCy) para no cortar ideas.
-3) Empaquetado greedy por longitud (≤ max_tokens aprox.) con control de min_chars.
+2) Refinamiento por oraciones (spaCy) para no cortar ideas (fallback robusto si spaCy no está).
+3) Empaquetado greedy por longitud (≤ max_tokens aprox.) con control de min_chars y max_chars.
 4) Cálculo opcional de embeddings para:
-   - cohesión intra-chunk (similitud promedio)
-   - redundancia inter-chunk
-   - afinidad con topics_doc (por keywords → centroides)
+   - cohesión chunk ↔ documento (centroide global)
+   - redundancia inter-chunk (máxima similitud)
+   - afinidad con topics_doc (centroides de keywords + solapamiento léxico)
 
 Robustez:
-- Si embeddings no disponibles, fallback a TF-IDF/Hashing.
-- Si spaCy no disponible, fallback por puntos/guiones.
-- Siempre transpone `topics_doc` del IR de entrada a meta de salida.
+- Si embeddings no disponibles, fallback a HashingVectorizer.
+- Si spaCy no disponible, fallback por regex de puntuación/saltos.
+- Siempre transpone `topics_doc` del IR de entrada a meta de salida (sin mutarlo).
+- Detección de idioma opcional (langdetect) → intenta elegir modelo spaCy adecuado; si falla, usa cfg.spacy_model.
+
+
 """
 
 from __future__ import annotations
@@ -44,6 +47,7 @@ logger.setLevel(logging.INFO)
 _HAS_SENTENCE_TRANSFORMERS = False
 _HAS_SKLEARN = False
 _HAS_SPACY = False
+_HAS_LANGDETECT = False
 
 try:
     from sentence_transformers import SentenceTransformer
@@ -62,6 +66,17 @@ try:
     _HAS_SKLEARN = True
 except Exception:
     pass
+
+try:
+    from langdetect import detect  # muy ligero; si no está, no rompemos
+    _HAS_LANGDETECT = True
+except Exception:
+    pass
+
+
+# ====== Parámetros semánticos (afinidad y scoring interno) ======
+_AFF_ALPHA_SEM = 0.7  # peso señal semántica (cosine con centroides de topic)
+_AFF_BETA_LEX = 0.3   # peso señal léxica (Jaccard chunk-tokens vs keywords topic)
 
 
 # ====== Utiles básicos ======
@@ -87,6 +102,50 @@ def _iter_blocks(ir: Dict[str, Any]) -> List[Tuple[int, int, Dict[str, Any]]]:
                 continue
             out.append((pno, i, blk))
     return out
+
+
+def _concat_blocks_text(blocks: List[Tuple[int, int, Dict[str, Any]]]) -> str:
+    """Concatena el texto de todos los bloques para heurísticas globales (p.ej. detección de idioma)."""
+    return "\n".join((b or {}).get("text", "") for _, _, b in blocks if (b or {}).get("text", ""))
+
+
+def _detect_lang_heuristic(ir: Dict[str, Any], fallback: Optional[str]) -> Optional[str]:
+    """
+    Detecta idioma sobre el documento si no viene en IR.lang:
+    - langdetect si está disponible.
+    - Si falla, retorna fallback (cfg.spacy_model) o None.
+    """
+    if _HAS_LANGDETECT:
+        try:
+            # Intentamos detectar sobre meta texto suficiente (todos los bloques concatenados)
+            blocks = _iter_blocks(ir)
+            raw = _concat_blocks_text(blocks)[:20000]  # límite razonable
+            if raw and len(raw) >= 40:
+                ld = detect(raw)  # devuelve 'es', 'en', 'fr', ...
+                return ld
+        except Exception as e:
+            logger.warning(f"[chunker] langdetect fallo: {e}")
+    # fallback
+    return None if (fallback is None or not fallback) else (fallback)
+
+
+def _choose_spacy_model(lang_code: Optional[str], cfg_model: str) -> str:
+    """
+    Selecciona modelo spaCy según código de idioma aproximado.
+    Si no lo reconoce o no está disponible, usa cfg_model.
+    """
+    if not lang_code:
+        return cfg_model
+    lang_code = lang_code.lower()
+    mapping = {
+        "es": "es_core_news_sm",
+        "en": "en_core_web_sm",
+        "fr": "fr_core_news_sm",
+        "de": "de_core_news_sm",
+        "it": "it_core_news_sm",
+        "pt": "pt_core_news_sm"
+    }
+    return mapping.get(lang_code, cfg_model)
 
 
 def _load_spacy(model_name: str):
@@ -123,6 +182,25 @@ def _is_heading(text: str, patterns: List[str]) -> bool:
     return False
 
 
+def _normalize_tokens(text: str) -> List[str]:
+    """Normaliza y tokeniza texto en palabras básicas (lowercase y limpieza leve)."""
+    if not text:
+        return []
+    t = text.lower()
+    t = re.sub(r"[^0-9a-záéíóúüñ\s]", " ", t)
+    return [w for w in t.split() if w.strip()]
+
+
+def _jaccard(a: List[str], b: List[str]) -> float:
+    """Jaccard simple entre dos listas de tokens."""
+    if not a or not b:
+        return 0.0
+    sa, sb = set(a), set(b)
+    inter = len(sa & sb)
+    union = len(sa | sb)
+    return float(inter / max(1, union))
+
+
 # ====== Embeddings / Vectorizadores ======
 class _Embedder:
     def __init__(self, model_name: str, batch_size: int):
@@ -143,12 +221,14 @@ class _Embedder:
             return
 
     def encode(self, texts: List[str]) -> np.ndarray:
+        if not texts:
+            return np.zeros((0, 1), dtype=np.float32)
         if self.kind == "sbert":
             return np.array(self.model.encode(texts, batch_size=self.batch_size, show_progress_bar=False))
         if self.kind == "hash":
             mat = self.model.transform(texts)  # sparse
             return mat.toarray().astype(np.float32)
-        # Sin embeddings: devolvemos promedio de longitud como vector dummy
+        # Sin embeddings: devolvemos longitud como vector dummy
         arr = np.array([[len(t)] for t in texts], dtype=np.float32)
         return arr
 
@@ -165,15 +245,23 @@ class _Embedder:
 
 
 def _topic_keyword_centroids(topics_doc: Optional[Dict[str, Any]], embedder: _Embedder) -> Dict[int, np.ndarray]:
+    """
+    Calcula centroides por topic_id a partir de sus keywords (si existen).
+    """
     if not topics_doc:
         return {}
     centroids: Dict[int, np.ndarray] = {}
     for t in topics_doc.get("topics", []):
-        tid = int(t.get("topic_id"))
+        try:
+            tid = int(t.get("topic_id"))
+        except Exception:
+            continue
         kws = t.get("keywords", []) or []
         if not kws:
             continue
         vecs = embedder.encode(kws)
+        if vecs.size == 0:
+            continue
         centroids[tid] = vecs.mean(axis=0)
     return centroids
 
@@ -226,7 +314,7 @@ def _pack_sentences_to_chunks(
     buf_texts: List[str] = []
     buf_spans: List[ChunkSourceSpan] = []
     buf_chars = 0
-    order = 0
+    order = 0 if not chunks else (chunks[-1].order + 1)  # (solo por claridad; realmente resume fuera)
 
     def flush():
         nonlocal chunks, buf_texts, buf_spans, buf_chars, order
@@ -237,13 +325,13 @@ def _pack_sentences_to_chunks(
             buf_texts, buf_spans, buf_chars = [], [], 0
             return
         est = _estimate_tokens(text)
-        chunk_id = f"{doc_id[:8]}_{order:04d}_{_hash_id(text)}"
+        chunk_id = f"{doc_id[:8]}_{len(chunks):04d}_{_hash_id(text)}"
         thints = topic_hints_builder(text)
         chunks.append(
             Chunk(
                 chunk_id=chunk_id,
                 doc_id=doc_id,
-                order=order,
+                order=len(chunks),  # orden global creciente y estable
                 text=text,
                 char_len=len(text),
                 est_tokens=est,
@@ -252,15 +340,13 @@ def _pack_sentences_to_chunks(
                 scores={}
             )
         )
-        order += 1
         buf_texts, buf_spans, buf_chars = [], [], 0
 
     for sent, pno, bidx in sentences_with_spans:
         sent = sent.strip()
         if not sent:
             continue
-        est = _estimate_tokens(sent)
-        # Si la oración sola excede max_chars, la forzamos (caso extremo)
+        # si una oración sola excede max_chars, flusheamos el buffer y la forzamos como chunk
         if len(sent) > cfg.max_chars:
             if buf_texts:
                 flush()
@@ -271,12 +357,12 @@ def _pack_sentences_to_chunks(
 
         # ¿Cabe en el buffer actual?
         if (buf_chars + len(sent) > cfg.max_chars) or (_estimate_tokens(" ".join(buf_texts + [sent])) > cfg.max_tokens):
-            # Si el buffer actual es muy corto, igual flush para no concatenar
             if buf_chars >= cfg.min_chars:
                 flush()
             else:
-                # Forzamos flush suave (demasiado corta pero no cabe la nueva)
+                # flush suave: estaba corto pero no cabe la nueva; cerramos igual
                 flush()
+
         # Añadimos
         buf_texts.append(sent)
         # agregamos span (acumular por página)
@@ -295,46 +381,110 @@ def _pack_sentences_to_chunks(
 
 
 def _build_topic_hints_fn(cfg: ChunkingConfig, topics_doc: Optional[Dict[str, Any]], embedder: _Embedder):
+    """
+    Construye una función que, dado el texto de un chunk, devuelva TopicHints:
+    - inherited_topic_ids: topK por afinidad semántica con centroides de topics_doc
+    - inherited_keywords: mezcla de keywords_global + keywords del mejor topic
+    - topic_affinity: dict topic_id → score (combinación semántica+léxica normalizada)
+    """
     centroids = _topic_keyword_centroids(topics_doc, embedder)
+    keywords_global = (topics_doc or {}).get("keywords_global") or []
+    topics_list = (topics_doc or {}).get("topics") or []
+
+    # Preparamos tabla topic_id -> keywords (para señal léxica)
+    topic_kw_map: Dict[int, List[str]] = {}
+    for t in topics_list:
+        try:
+            tid = int(t.get("topic_id"))
+        except Exception:
+            continue
+        kws = t.get("keywords", []) or []
+        topic_kw_map[tid] = list({k for k in kws if k})
 
     def builder(text: str) -> TopicHints:
-        if not topics_doc or not centroids:
+        if not topics_doc or (not centroids and not keywords_global):
             return TopicHints()
-        tv = embedder.encode([text])[0]
-        affinities: List[Tuple[int, float]] = []
+
+        tv = embedder.encode([text])[0]  # vector chunk
+        chunk_tokens = _normalize_tokens(text)
+
+        # Afinidad semántica con centroides
+        affinities_sem: List[Tuple[int, float]] = []
         for tid, cv in centroids.items():
             sim = _Embedder.cos_sim(tv, cv)
-            affinities.append((tid, sim))
-        affinities.sort(key=lambda x: x[1], reverse=True)
-        topk = affinities[: max(1, cfg.topic_affinity_topk)]
+            affinities_sem.append((tid, float(sim)))
+
+        # Afinidad léxica (Jaccard tokens chunk vs keywords del topic)
+        affinities_lex: Dict[int, float] = {}
+        for tid, kws in topic_kw_map.items():
+            affinities_lex[tid] = _jaccard(chunk_tokens, [k.lower() for k in kws])
+
+        # Combinación ponderada (si falta una señal, la otra domina)
+        combined: List[Tuple[int, float]] = []
+        topic_ids_all = set([tid for tid, _ in affinities_sem]) | set(affinities_lex.keys())
+        for tid in topic_ids_all:
+            s_sem = next((v for t, v in affinities_sem if t == tid), 0.0)
+            s_lex = affinities_lex.get(tid, 0.0)
+            sc = _AFF_ALPHA_SEM * s_sem + _AFF_BETA_LEX * s_lex
+            combined.append((tid, float(sc)))
+
+        combined.sort(key=lambda x: x[1], reverse=True)
+        topk = combined[: max(1, cfg.topic_affinity_topk)]
         topic_ids = [t for t, _ in topk]
         scores = {str(t): float(s) for t, s in topk}
-        inherited_kws = (topics_doc.get("keywords_global") or [])[:10]
+
+        # Herencia de keywords: globales + del best topic (si existe)
+        inherited_kws = list({k for k in keywords_global[:10] if k})
+        if topk:
+            best_tid = topk[0][0]
+            for k in (topic_kw_map.get(best_tid, [])[:10]):
+                if k and k not in inherited_kws:
+                    inherited_kws.append(k)
+
         return TopicHints(
             inherited_topic_ids=topic_ids,
-            inherited_keywords=inherited_kws,
+            inherited_keywords=inherited_kws[:15],  # límite prudente
             topic_affinity=scores
         )
 
     return builder
 
 
-def _compute_scores(chunks: List[Chunk], embedder: _Embedder) -> None:
-    """Anota métricas ligeras por chunk: cohesión y redundancia."""
+def _compute_doc_centroid(blocks: List[Tuple[int, int, Dict[str, Any]]], embedder: _Embedder) -> Optional[np.ndarray]:
+    """
+    Centroide del documento a partir de embeddings de bloques (robusto y barato).
+    Si no hay bloques, devuelve None.
+    """
+    if not blocks:
+        return None
+    texts = [(b or {}).get("text", "") for _, _, b in blocks if (b or {}).get("text", "")]
+    if not texts:
+        return None
+    vecs = embedder.encode(texts)
+    if vecs.size == 0:
+        return None
+    return vecs.mean(axis=0)
+
+
+def _compute_scores(chunks: List[Chunk], embedder: _Embedder, doc_centroid: Optional[np.ndarray]) -> None:
+    """Anota métricas por chunk: cohesión vs doc-centroid y redundancia inter-chunk (+ normalizada)."""
     if not chunks:
         return
     texts = [c.text for c in chunks]
     vecs = embedder.encode(texts)
 
-    # Cohesión: similitud de cada oración interna vs promedio (aprox por troceo simple)
-    # Para eficiencia, usamos el propio vector del chunk comparado con medias globales.
-    mean_vec = vecs.mean(axis=0)
+    # Cohesión: similitud chunk ↔ centroide del documento (si existe)
     for i, c in enumerate(chunks):
-        # similitud del chunk vs media global (proxy de coherencia contextual del doc)
-        coh = _Embedder.cos_sim(vecs[i], mean_vec)
+        if doc_centroid is not None:
+            coh = _Embedder.cos_sim(vecs[i], doc_centroid)
+        else:
+            # fallback: comparar contra media de chunks (mantiene comportamiento anterior)
+            mean_vec = vecs.mean(axis=0)
+            coh = _Embedder.cos_sim(vecs[i], mean_vec)
         c.scores["cohesion_vs_doc"] = float(coh)
 
-    # Redundancia inter-chunk (vecino más similar)
+    # Redundancia inter-chunk (vecino más similar) y versión normalizada
+    avg_len = float(np.mean([max(1, ch.char_len) for ch in chunks]))
     for i in range(len(chunks)):
         sims = []
         for j in range(len(chunks)):
@@ -343,6 +493,9 @@ def _compute_scores(chunks: List[Chunk], embedder: _Embedder) -> None:
             sims.append(_Embedder.cos_sim(vecs[i], vecs[j]))
         cmax = max(sims) if sims else 0.0
         chunks[i].scores["max_redundancy"] = float(cmax)
+        # normalización por tamaño relativo del chunk (heurística contra duplicidad "barata")
+        rel = chunks[i].char_len / avg_len if avg_len > 0 else 1.0
+        chunks[i].scores["redundancy_norm"] = float(cmax * rel)
 
 
 def run(
@@ -360,6 +513,7 @@ def run(
     mime = ir_with_topics.get("mime")
     lang = ir_with_topics.get("lang")
 
+    # Puede venir en ir.meta.topics_doc o al nivel raíz (compat)
     topics_doc = ((ir_with_topics.get("meta") or {}).get("topics_doc")) or (ir_with_topics.get("topics_doc"))
 
     # 1) Extraer bloques textuales
@@ -367,23 +521,37 @@ def run(
     if not blocks:
         logger.warning(f"[chunker] Documento sin bloques textuales: {doc_id}")
 
-    # 2) Pre-segmentación por headings/listas
+    # 1.1) Detección de idioma (solo si no viene o es 'und')
+    detected_lang = None
+    if (not lang) or (isinstance(lang, str) and lang.lower() in {"", "und", "xx"}):
+        detected_lang = _detect_lang_heuristic(ir_with_topics, None)
+        if detected_lang:
+            lang = detected_lang
+
+    # 2) Selección/carga spaCy según idioma (con fallback)
+    chosen_spacy_model = _choose_spacy_model(lang, cfg.spacy_model)
+    nlp = _load_spacy(chosen_spacy_model)
+    if nlp is None and chosen_spacy_model != cfg.spacy_model:
+        # último intento: el definido en config
+        nlp = _load_spacy(cfg.spacy_model)
+
+    # 3) Pre-segmentación por headings/listas
     sections = _presegment_blocks(blocks, cfg)
 
-    # 3) Preparar herramientas
-    nlp = _load_spacy(cfg.spacy_model)
+    # 4) Preparar herramientas semánticas
     embedder = _Embedder(cfg.embedding_model, cfg.embedding_batch_size)
     topic_hints_builder = _build_topic_hints_fn(cfg, topics_doc, embedder)
 
-    # 4) Por sección: dividir en oraciones y empaquetar
+    # 4.1) Centroide del documento (para cohesión_vs_doc)
+    doc_centroid = _compute_doc_centroid(blocks, embedder)
+
+    # 5) Por sección: dividir en oraciones y empaquetar
     all_chunks: List[Chunk] = []
-    for sec_blocks, starts_with_heading in sections:
-        # concatenamos texto dentro de la sección, pero conservamos spans
+    for sec_blocks, _starts_with_heading in sections:
         sentences_with_spans: List[Tuple[str, int, int]] = []
         for pno, bidx, blk in sec_blocks:
             sents = _sentence_split(blk.get("text", ""), nlp)
             for s in sents:
-                # filtrado suave de basura
                 if len(s.strip()) < 3:
                     continue
                 sentences_with_spans.append((s, pno, bidx))
@@ -394,15 +562,24 @@ def run(
             cfg=cfg,
             topic_hints_builder=topic_hints_builder
         )
+        # Ajuste de orden global: reasignamos para mantener monotonicidad absoluta
+        for ch in sec_chunks:
+            ch.order = len(all_chunks)
+            ch.chunk_id = f"{doc_id[:8]}_{ch.order:04d}_{_hash_id(ch.text)}"
         all_chunks.extend(sec_chunks)
 
-    # 5) Scoring opcional por embeddings (cohesión y redundancia)
-    if cfg.use_embeddings and len(all_chunks) >= 2:
-        _compute_scores(all_chunks, embedder)
+    # 6) Scoring por embeddings (cohesión y redundancia)
+    if cfg.use_embeddings and len(all_chunks) >= 1:
+        _compute_scores(all_chunks, embedder, doc_centroid)
 
-    # 6) Construir salida
+    # 7) Construir salida
+    meta_cfg = cfg.model_dump()
+    # Añadimos huellas informativas, sin modificar el contrato (solo meta/config)
+    meta_cfg["detected_lang"] = detected_lang or ""
+    meta_cfg["used_spacy_model"] = chosen_spacy_model
+
     meta = ChunkingMeta(
-        config=cfg.model_dump(),
+        config=meta_cfg,
         topics_doc=topics_doc,
         stats={
             "n_sections": len(sections),
@@ -438,7 +615,7 @@ def save_chunks(chunks: DocumentChunks, outdir: str | Path) -> Path:
     p = outdir / fname
     with p.open("w", encoding="utf-8") as f:
         json.dump(
-            chunks.model_dump(mode="json"),  # 👈 este cambio
+            chunks.model_dump(mode="json"),
             f,
             ensure_ascii=False,
             indent=2
