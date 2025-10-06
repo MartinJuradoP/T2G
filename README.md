@@ -194,6 +194,7 @@ project_T2G/
 #### 3) HybridChunker ✅
 
 **Entrada:** `DocumentIR+Topics` (`outputs_doc_topics/*.json`)
+
 **Salida:** `DocumentChunks` (`outputs_chunks/*.json`)
 
 **Qué hace (paso a paso):**
@@ -202,63 +203,115 @@ project_T2G/
 
    * Toma todos los bloques textuales del `DocumentIR`.
    * Cada bloque conserva trazabilidad (`page_number`, `block_indices`) para poder mapear chunks a posiciones exactas en el documento.
+   * Filtra bloques vacíos o no textuales (imágenes, tablas sin OCR).
 
 2. **Segmentación semántica híbrida**
    Se combinan varias estrategias para dividir el documento en **chunks coherentes de ≤2048 tokens** (óptimo para LLMs):
 
-   * **Reglas de headings**: patrones típicos (`Introducción`, `Métodos`, `Conclusiones`, etc.) detectados vía regex.
-   * **spaCy sentence boundaries**: segmenta párrafos largos en oraciones bien definidas.
-   * **Embeddings (SentenceTransformers)**: evalúa cohesión semántica entre bloques y decide si agrupar o dividir.
-     → El resultado son **chunks “estables”**: suficientemente largos para contexto, pero sin sobrepasar el límite de tokens.
+   * **Reglas de headings:** patrones típicos (`Introducción`, `Métodos`, `Conclusiones`, etc.) detectados vía regex.
+     Esto evita cortar secciones temáticas de forma arbitraria.
+
+   * **spaCy sentence boundaries:** segmenta párrafos largos en oraciones completas, preservando la coherencia sintáctica.
+     Si spaCy no está disponible, se aplica un fallback mediante puntuación (`.`, `;`, `?`, `!`) o saltos de línea dobles (`\n\n`).
+
+   * **Empaquetado semántico por longitud:** agrupa oraciones hasta alcanzar un límite aproximado de tokens.
+     Controla umbrales de tamaño (`min_chars`, `max_chars`, `max_tokens`) para mantener chunks **equilibrados** en densidad y contexto.
+     → El resultado son **unidades estables**: suficientemente largas para el contexto, pero sin sobrepasar los límites óptimos de procesamiento.
 
 3. **Herencia de contexto (`topic_hints`)**
 
    * Cada chunk hereda información del doc-level contextizer (`topic_ids`, `keywords_global`, `topic_affinity`).
-   * Esto asegura **consistencia semántica vertical**: lo que el documento sabe a nivel global está presente también en cada chunk.
-
-4. **Cálculo de métricas locales**
-   Para evaluar la calidad y la coherencia de los chunks, se calculan métricas ligeras:
-
-   * `cohesion_vs_doc`: mide la similitud coseno entre el embedding del chunk y el embedding medio del documento.  
-     Representa **qué tan bien se mantiene el contexto global** dentro del fragmento.
-
-   * `max_redundancy`: mide la similitud máxima del chunk con cualquier otro chunk.  
-     Permite detectar **fragmentos duplicados o demasiado parecidos** dentro del mismo documento.
-
-   * `redundancy_norm`: versión normalizada de la redundancia, que ajusta por el tamaño relativo del chunk.  
-     Se define como:
+   * Esto asegura **consistencia semántica vertical**: lo que el documento conoce a nivel global se transfiere a los fragmentos locales.
+   * La afinidad entre el chunk y los tópicos globales se calcula mediante una mezcla semántico-léxica:
 
      ```math
-     \text{redundancy\_norm} = \text{max\_redundancy} \times \frac{\text{len(chunk)}}{\text{avg\_len\_chunks}}
+     \text{topic\_affinity\_blend}(c, t) = \alpha \cdot \cos(\vec{c}, \vec{t}) + (1 - \alpha) \cdot J(c, t)
      ```
 
-     Esto penaliza más a los chunks **largos y redundantes**, mientras que reduce el peso de los **fragmentos cortos** aunque sean similares.  
-     En textos como contratos, reseñas o tweets, permite distinguir entre contenido **repetitivo** y **informativo**.
+     Donde:
 
+     * $\vec{c}$ y $\vec{t}$ son los embeddings del chunk y del topic.
+     * $J(c, t)$ es la similitud léxica (*Jaccard*).
+     * $\alpha$ controla el peso semántico (por defecto, $\alpha = 0.7$).
+
+     Esta combinación hace al sistema más robusto frente a textos cortos (tweets, cláusulas legales o notas clínicas) donde la semántica sola puede ser insuficiente.
+
+4. **Cálculo de métricas locales**
+   Para evaluar la calidad y la coherencia de los chunks, se calculan métricas cuantitativas:
+
+   * `cohesion_vs_doc`: mide la similitud coseno entre el embedding del chunk y el embedding promedio del documento.
+     Representa **qué tan bien el fragmento conserva el contexto global**.
+
+     ```math
+     \text{cohesion\_vs\_doc}(c_i) = \cos(\vec{c_i}, \bar{\vec{D}})
+     ```
+
+   * `max_redundancy`: mide la similitud máxima del chunk con cualquier otro chunk dentro del mismo documento.
+     Detecta **fragmentos repetitivos o duplicados**.
+
+     ```math
+     \text{max\_redundancy}(c_i) = \max_{j \neq i} \cos(\vec{c_i}, \vec{c_j})
+     ```
+
+   * `redundancy_norm`: versión normalizada de la redundancia, que ajusta el valor según el tamaño relativo del fragmento.
+
+     ```math
+     \text{redundancy\_norm}(c_i) =
+     \text{max\_redundancy}(c_i) \times \frac{\text{len}(c_i)}{\text{avg\_len(chunks)}}
+     ```
+
+     Esto penaliza más a los chunks **largos y redundantes**, y reduce el impacto de los fragmentos **cortos pero similares**.
+     En textos como contratos, reseñas o tweets, mejora la detección de contenido **repetitivo** versus **informativo**.
+
+   * `novelty`: mide la proporción de información nueva que aporta cada fragmento.
+     Es complementaria a la redundancia.
+
+     ```math
+     \text{novelty}(c_i) = 1 - \text{max\_redundancy}(c_i)
+     ```
+
+     Un valor alto de `novelty` indica que el chunk aporta **contexto único o evidencia nueva**.
+
+   * `chunk_health`: métrica compuesta que pondera la cohesión y la novedad penalizando la redundancia.
+     Resume la **salud semántica del fragmento**.
+
+     ```math
+     \text{chunk\_health}(c_i) = \text{cohesion\_vs\_doc}(c_i) \times (1 - \text{max\_redundancy}(c_i))
+     ```
+
+     Este score puede usarse en etapas posteriores (por ejemplo, el **Adaptive Schema Selector**) para **ponderar o filtrar chunks** según su calidad semántica.
 
 5. **Serialización robusta**
 
-   * Cada chunk se guarda con `chunk_id` único, trazabilidad al documento (`doc_id`), orden secuencial y `source_spans`.
-   * Se asegura compatibilidad JSON (ej. timestamps en ISO 8601).
+   * Cada chunk se guarda con un `chunk_id` único, metadatos (`doc_id`, idioma, embeddings opcionales) y trazabilidad (`source_spans`).
+   * El formato JSON conserva compatibilidad con las etapas siguientes (`contextize-chunks`, `schema-select`).
+   * Si los embeddings o spaCy no están disponibles, aplica **fallbacks automáticos** para mantener la robustez del pipeline.
 
 * **Ejemplo de salida (simplificado):**
 
 ```json
 {
   "chunk_id": "DOC-123_0001",
-  "text": "Complicaciones Asociadas...",
+  "text": "Complicaciones Asociadas al tratamiento prolongado...",
   "topic_hints": {
-    "inherited_keywords": ["diabetes","tratamiento"],
-    "inherited_topic_ids": [0,1]
+    "inherited_keywords": ["diabetes", "tratamiento"],
+    "inherited_topic_ids": [0, 1],
+    "topic_affinity_blend": {"0": 0.82, "1": 0.71}
   },
   "scores": {
     "cohesion_vs_doc": 0.82,
-    "max_redundancy": 0.59
+    "max_redundancy": 0.59,
+    "redundancy_norm": 0.73,
+    "novelty": 0.41,
+    "chunk_health": 0.34
+  },
+  "meta_local": {
+    "embedding_model": "all-MiniLM-L6-v2",
+    "lang": "es"
   }
 }
 ```
 
----
 
 #### 4) BERTopic Contextizer (chunk-level) ✅
 
