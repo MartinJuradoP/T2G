@@ -43,34 +43,54 @@
 
 ```bash
 project_T2G/
-├── docs/                      # Documentos de prueba
-├── parser/                    # Subsistema Parser
-│   ├── parsers.py
-│   ├── metrics.py
-│   ├── schemas.py
+├── docs/                            # Documentos de prueba y ejemplos
+│   ├── samples/
+│   └── benchmarks/
+│
+├── parser/                          # Subsistema Parser
+│   ├── parsers.py                   # Lógica de parseo (PDF, DOCX, IMG)
+│   ├── metrics.py                   # Métricas: %docs_ok, layout_loss, table_consistency
+│   ├── schemas.py                   # Contratos Pydantic (DocumentIR)
+│   ├── helpers.py                   # Utilidades comunes de parsing
 │   └── __init__.py
-├── contextizer/               # Subsistema Contextizer
-│   ├── contextizer.py
-│   ├── metrics.py
-│   ├── models.py
-│   ├── utils.py
-│   ├── schemas.py
+│
+├── contextizer/                     # Subsistema Contextizer híbrido
+│   ├── contextizer.py               # Orquestador principal (doc- y chunk-level)
+│   ├── metrics.py                   # Métricas básicas de cobertura, redundancia, etc.
+│   ├── metrics_ext.py               # Métricas extendidas (coherence_semantic, entropy, etc.)
+│   ├── analyzers.py                 # Router adaptativo (avg_len, TTR, semantic_var)
+│   ├── models.py                    # Clases internas (TopicItem, ContextizerResult)
+│   ├── schemas.py                   # Contratos Pydantic (DocumentTopics, ChunkTopics)
+│   ├── utils.py                     # Normalización, stopwords, embeddings, caching
+│   ├── hybrid/                      # Núcleo del modo híbrido
+│   │   ├── hybrid_contextizer.py    # Fusión TF-IDF + KeyBERT + embeddings + DBSCAN
+│   │   ├── density_clustering.py    # Clustering semántico adaptativo
+│   │   ├── keyword_fusion.py        # Fusión híbrida de scores
+│   │   ├── mmr.py                   # Maximal Marginal Relevance (diversificación)
+│   │   ├── analyzers.py             # Analizadores estadísticos por bloque
+│   │   ├── metrics_ext.py           # Métricas de topic-coherence y redundancia
+│   │   └── __init__.py
 │   └── __init__.py
-├── schema_selector/           # Adaptive Schema Selector 🔥
-│   ├── registry.py            # Ontologías y dominios (medical, legal, etc.)
-│   ├── schemas.py             # Contratos Pydantic + Config
-│   ├── selector.py            # Lógica de scoring y selección
-│   ├── utils.py               # Funciones auxiliares (similitud, normalización)
+│
+├── schema_selector/                 # Adaptive Schema Selector
+│   ├── registry.py                  # Ontologías y dominios (medical, legal, etc.)
+│   ├── schemas.py                   # Contratos Pydantic
+│   ├── selector.py                  # Lógica de scoring y selección adaptativa
+│   ├── utils.py                     # Funciones auxiliares (similitud, normalización)
 │   └── __init__.py
-├── pipelines/
+│
+├── pipelines/                       # Configuración declarativa del pipeline
 │   └── pipeline.yaml
-├── outputs_ir/                # Salidas: DocumentIR
-├── outputs_doc_topics/        # Salidas: IR+Topics
-├── outputs_chunks/            # Salidas: Chunks
-├── outputs_schema/            # Salidas: SchemaSelection
-├── t2g_cli.py                 # CLI unificado
+│
+├── outputs_ir/                      # Salidas intermedias (IR JSON)
+├── outputs_doc_topics/              # DocumentIR + Topics (doc-level)
+├── outputs_chunks/                  # Chunks enriquecidos (chunk-level)
+├── outputs_schema/                  # Selección de esquemas adaptativos
+│
+├── t2g_cli.py                       # CLI unificado para orquestación
 ├── requirements.txt
 └── README.md
+
 ```
 
 ---
@@ -119,79 +139,214 @@ project_T2G/
 
 ---
 
-### 2) BERTopic Contextizer (doc-level) ✅
+### 2) Hybrid Contextizer (doc-level) ✅
 
 **Entrada:** `DocumentIR` (`outputs_ir/*.json`)
 **Salida:** `DocumentIR+Topics` (`outputs_doc_topics/*.json`)
 
-**Qué hace:**
+---
 
-* **1. Extracción de texto**:
-  Toma todos los bloques textuales del documento (párrafos, headings, tablas OCR).
-  Preprocesa eliminando espacios raros, stopwords multilingües y normalizando tokens.
+**Qué hace (paso a paso):**
 
-* **2. Embeddings globales**:
-  Cada bloque se convierte en un vector usando **SentenceTransformers** (`all-MiniLM-L6-v2`).
-  Estos embeddings capturan similitud semántica más allá de palabras exactas.
+1. **Extracción y normalización del texto**
 
-* **3. Clustering de tópicos con BERTopic**:
-  Los embeddings se reducen con **UMAP** y se agrupan con **HDBSCAN**.
+   * Toma todos los bloques textuales (`pages[].blocks[].text`) del IR.
+   * Aplica limpieza ligera:
 
-  * **UMAP** → baja dimensión para preservar estructura semántica.
-  * **HDBSCAN** → encuentra clusters de tamaño variable sin fijar `k`.
-  * **BERTopic** → asigna palabras clave representativas a cada cluster.
+     * Colapsa espacios en blanco.
+     * Elimina caracteres no textuales (`•`, `¶`, `—`, etc.).
+     * Sustituye comillas y apóstrofes para uniformidad.
+   * Cada bloque se conserva con su trazabilidad:
 
-* **4. Heurística adaptativa (corpus pequeño)**:
-  Como documentos pueden ser muy cortos, aplicamos **fallbacks** para evitar errores o ruido:
+     * `page_number`, `block_index`, `type`.
+   * Si el texto está vacío o contiene menos de 3 caracteres, se descarta.
 
-  * **0–1 bloques** → se asigna un único topic (`singleton`), con keywords derivadas por frecuencia.
-  * **2 bloques** → no hay suficiente masa para clustering; se aplica **TF-based fallback** (frecuencia de términos relevantes).
-  * **≥3 bloques** → se ejecuta BERTopic normal con embeddings + clustering.
-    Esto asegura que siempre exista al menos un `topic` incluso en documentos mínimos.
+   **Resultado:** un conjunto de bloques válidos `texts` de tamaño `n`, normalizados y listos para análisis semántico.
 
-* **5. Post-procesamiento y limpieza**:
-  Para cada cluster (topic) se selecciona:
+---
 
-  * `exemplar`: bloque de texto más representativo.
-  * `keywords`: lista de palabras clave filtradas (removiendo stopwords, duplicados, ruido corto).
-  * `count`: número de bloques asignados.
-    Además se calculan métricas globales como `outlier_ratio` (proporción de bloques no asignados a ningún cluster válido).
+2. **Cálculo de embeddings globales**
 
-**Enriquecimiento agregado a `meta.topics_doc`:**
+   Se usa el modelo configurado (`SentenceTransformer` con `cfg.embedding_model`).
 
-* `n_topics`: número total de tópicos encontrados o inferidos.
-* `keywords_global`: lista unificada de keywords más frecuentes en todo el documento.
-* `topics`: listado detallado de cada topic con `id`, `count`, `exemplar`, `keywords`.
-* `reason`: explica el modo usado (`doc-level`, `doc-fallback-small`, `doc-fallback-error`).
-* `outlier_ratio`: porcentaje de bloques descartados como outliers (cuando aplica).
+   ```math
+   E_i = f_{ST}(b_i)
+   ```
 
-**Ejemplo de salida:**
+   donde cada $E_i$ es un vector en $\mathbb{R}^d$.
+
+   Luego se calcula un vector promedio para representar el contexto general del documento:
+
+   ```math
+   \bar{E}_{doc} = \frac{1}{n}\sum_{i=1}^{n} E_i
+   ```
+
+   Este embedding global sirve para medir coherencia temática y variación semántica entre bloques.
+
+---
+
+3. **Router adaptativo (heurísticas del modo híbrido)**
+
+   El módulo `analyzers.py` determina si debe ejecutarse el **modo híbrido**.
+   Evalúa tres métricas simples pero efectivas:
+
+   | Métrica                             | Fórmula          | Umbral   | Significado            |        |                       |
+   | ----------------------------------- | ---------------- | -------- | ---------------------- | ------ | --------------------- |
+   | Longitud media (`avg_len`)          | $\frac{1}{n}\sum | b_i      | $                      | `< 45` | texto corto o ruidoso |
+   | Diversidad léxica (`TTR`)           | $\frac{V}{T}$    | `> 0.5`  | mucha variación léxica |        |                       |
+   | Varianza semántica (`semantic_var`) | $Var(E_i)$       | `> 0.25` | temas dispersos        |        |                       |
+
+   El híbrido se activa si **2 o más** condiciones son verdaderas:
+
+   ```json
+   "reason": "doc-hybrid"
+   ```
+
+   Este paso evita usar métodos costosos de clustering o reducción de dimensión en textos pequeños o de baja densidad.
+
+---
+
+4. **Clustering semántico por densidad**
+
+   Se aplica **DBSCAN** directamente sobre los embeddings para detectar grupos semánticos sin predefinir `n_topics`:
+
+   ```math
+   cluster(E_i) = 
+   \begin{cases}
+   k, & \text{si } \text{dist}_\text{cosine}(E_i, E_j) < \varepsilon \\
+   -1, & \text{ruido}
+   \end{cases}
+   ```
+
+   Parámetros:
+
+   ```math
+   \varepsilon = 0.25, \quad \text{min\_samples}=2
+   ```
+
+   La ventaja de DBSCAN es que **no requiere conocer cuántos temas existen**; se adapta a la estructura semántica del documento.
+
+---
+
+5. **Construcción de tópicos y keywords**
+
+   Una vez formados los clusters, el módulo `density_clustering.py` construye tópicos equivalentes a `TopicItem`:
+
+   ```math
+   topics = \{ t_k = (\text{keywords}, \text{exemplar}, \text{count}) \}
+   ```
+
+   Cada tópico $t_k$ se resume con:
+
+   * **Exemplar:** bloque más representativo (máxima similitud media dentro del cluster).
+   * **Count:** número de bloques asignados.
+   * **Keywords:** extraídas mediante la fusión híbrida de señales léxicas y semánticas.
+
+---
+
+6. **Extracción y fusión de keywords (TF-IDF + KeyBERT + Embeddings)**
+
+   Se combina información de tres fuentes:
+
+   1. **Relevancia léxica (TF-IDF):**
+
+      ```math
+      S_{tfidf}(w) = tf(w) \cdot \log\frac{N}{df(w)}
+      ```
+
+      Evalúa la importancia del término dentro del documento.
+
+   2. **Relevancia contextual (KeyBERT, opcional):**
+
+      ```math
+      S_{keybert}(w) = \cos(\vec{w}, \bar{E}_{doc})
+      ```
+
+      Mide alineación semántica con el contexto global.
+
+   3. **Cohesión semántica (embeddings):**
+
+      ```math
+      S_{emb}(w) = \frac{1}{k}\sum_{i=1}^{k}\cos(\vec{E_i}, \vec{w})
+      ```
+
+   Las tres se fusionan ponderadamente:
+
+   ```math
+   S_{hybrid}(w) = 0.5 S_{tfidf}(w) + 0.3 S_{keybert}(w) + 0.2 S_{emb}(w)
+   ```
+
+   Esta ponderación surge de experimentos que equilibran precisión contextual y estabilidad en documentos pequeños.
+
+---
+
+7. **Selección de keywords por Maximal Marginal Relevance (MMR)**
+
+   Se aplica el filtro MMR (`mmr.py`) para eliminar sinónimos y redundancia:
+
+   ```math
+   MMR(w_i) = \lambda \cos(\vec{w_i}, \vec{t}) - (1-\lambda)\max_{w_j\in S}\cos(\vec{w_i}, \vec{w_j})
+   ```
+
+   con $\lambda = 0.7$.
+
+   Resultado: un conjunto reducido de keywords informativas y no redundantes.
+
+---
+
+8. **Cálculo de métricas extendidas**
+
+   Las métricas cuantitativas (`metrics_ext.py`) permiten auditar la calidad semántica:
+
+   | Métrica                  | Descripción             | Fórmula                               |                |    |   |    |
+   | ------------------------ | ----------------------- | ------------------------------------- | -------------- | -- | - | -- |
+   | `entropy_topics`         | Dispersión de tópicos   | $- \sum p_j \log p_j$                 |                |    |   |    |
+   | `redundancy_score`       | Redundancia media       | $1 - \frac{V_\text{único}}{V}$        |                |    |   |    |
+   | `keywords_diversity_ext` | Diversidad global       | $\frac{                               | V_\text{único} | }{ | V | }$ |
+   | `semantic_variance`      | Varianza de embeddings  | $Var(E_{exemplar})$                   |                |    |   |    |
+   | `coherence_semantic`     | Coherencia intra-tópico | $\overline{\cos(E_{kw_i}, E_{kw_j})}$ |                |    |   |    |
+
+---
+
+9. **Salida (JSON)**
 
 ```json
 "topics_doc": {
-  "reason": "doc-level",
-  "n_topics": 2,
-  "keywords_global": ["diabetes","insulina","síntomas"],
+  "reason": "doc-hybrid",
+  "n_samples": 12,
+  "n_topics": 3,
+  "keywords_global": ["mercado","acciones","inversión"],
   "topics": [
-    {
-      "topic_id": 0,
-      "count": 5,
-      "exemplar": "Síntomas Clínicos más frecuentes...",
-      "keywords": ["síntomas","micción","aumento"]
-    },
-    {
-      "topic_id": 1,
-      "count": 4,
-      "exemplar": "Diabetes Tipo 2: Un enfoque clínico",
-      "keywords": ["diabetes","tratamiento","complicaciones"]
-    }
-  ]
+    {"topic_id":0,"count":4,"exemplar":"El mercado bursátil sube tras reporte trimestral...","keywords":["acciones","finanzas","subida"]},
+    {"topic_id":1,"count":5,"exemplar":"Informe de inflación mensual afecta inversión...","keywords":["inflación","inversión","monetaria"]},
+    {"topic_id":2,"count":3,"exemplar":"Perspectivas globales para 2025...","keywords":["economía","riesgo","global"]}
+  ],
+  "metrics": {
+    "redundancy_score": 0.19,
+    "semantic_variance": 0.38,
+    "entropy_topics": 0.72,
+    "coherence_semantic": 0.88
+  }
 }
 ```
 
 ---
 
-#### 3) HybridChunker ✅
+10. **Beneficios técnicos del enfoque híbrido**
+
+| Dimensión         | Mejora                                                   |
+| ----------------- | -------------------------------------------------------- |
+| Robustez          | Maneja textos breves y ruidosos sin colapsar.            |
+| Interpretabilidad | Cada tópico conserva su contexto original.               |
+| Estabilidad       | No requiere hiperparámetros ajustados.                   |
+| Trazabilidad      | Cada decisión se justifica con `meta.reason` y métricas. |
+| Escalabilidad     | Reutiliza embeddings y evita pasos costosos.             |
+
+---
+
+
+
+### 3) HybridChunker ✅
 
 **Entrada:** `DocumentIR+Topics` (`outputs_doc_topics/*.json`)
 
@@ -301,45 +456,144 @@ project_T2G/
 ```
 
 
-#### 4) BERTopic Contextizer (chunk-level) ✅
+---
 
-* **Entrada:** `DocumentChunks`
+### 4) Hybrid Contextizer (chunk-level) ✅
 
-* **Salida:** `Chunks+Topics`
+**Entrada:** `DocumentChunks` (`outputs_chunks/*.json`)
+**Salida:** `Chunks+Topics` (`outputs_chunks/*.json`)
 
-* **Qué hace:**
+---
 
-  * Recalcula embeddings para cada chunk.
-  * Intenta descubrir **subtemas locales** con BERTopic.
-  * **Lógica de fallback**:
+**Qué hace (paso a paso):**
 
-    * `n_samples = 0` → no hay texto, se omite.
-    * `n_samples < 5` → usa fallback por frecuencia de términos.
-    * `n_samples ≥ 5` → corre BERTopic normal.
-  * Cada chunk queda enriquecido con:
+1. **Carga de chunks y herencia vertical**
 
-    * `topic` (id, keywords, prob).
-    * `topic_hints` (heredados de doc-level).
+   * Toma los chunks creados por el `HybridChunker`.
+   * Cada chunk incluye texto, contexto heredado (`topic_hints`, `keywords_global`) y métricas locales (`cohesion_vs_doc`, `chunk_health`).
+   * Se asegura **consistencia semántica vertical**:
 
-* **Ejemplo de salida (fallback):**
+     ```math
+     T_{chunk} \subseteq T_{doc}
+     ```
+
+     Esto garantiza que los subtemas locales siempre estén dentro de los temas globales del documento.
+
+---
+
+2. **Recalculo de embeddings locales**
+
+   Cada chunk $c_i$ se representa con un vector `SentenceTransformer`:
+
+   ```math
+   E_{c_i} = f_{ST}(c_i)
+   ```
+
+   Y se calcula un embedding global del documento:
+
+   ```math
+   \bar{E}_{doc} = \frac{1}{N}\sum_i E_{c_i}
+   ```
+
+   Este vector sirve para medir la alineación temática entre cada fragmento y el contexto general.
+
+---
+
+3. **Router adaptativo (modo de operación)**
+
+   | Condición       | Modo           | Acción                        |
+   | --------------- | -------------- | ----------------------------- |
+   | `n_samples = 0` | skip           | omite                         |
+   | `<5`            | fallback-small | usa TF-IDF simple             |
+   | `5 ≤ n ≤ 50`    | hybrid         | usa pipeline híbrido completo |
+   | `>50`           | hybrid-large   | usa DBSCAN más estricto       |
+
+   ```json
+   "reason": "chunk-hybrid"
+   ```
+
+---
+
+4. **Generación de tópicos locales**
+
+   * **TF-IDF fallback:**
+
+     ```math
+     S_{freq}(w) = \frac{f(w)}{\sum f(w)}
+     ```
+   * **Modo híbrido completo:**
+
+     ```math
+     S_{hybrid}(w) = 0.5 S_{tfidf}(w) + 0.3 S_{keybert}(w) + 0.2 S_{emb}(w)
+     ```
+   * **Clustering local:**
+
+     ```math
+     \varepsilon = 0.25, \quad \text{min\_samples}=2
+     ```
+
+   Cada cluster produce un conjunto de keywords diversificado con MMR local.
+
+---
+
+5. **Afinidad entre tópicos locales y globales**
+
+   Se mide la coherencia semántica entre cada chunk y los tópicos globales del documento:
+
+   ```math
+   affinity(c_i, t_j) = 0.7 \cos(E_{c_i}, E_{t_j}) + 0.3 J(c_i, t_j)
+   ```
+
+   donde $J$ es similitud léxica (*Jaccard*).
+
+---
+
+6. **Métricas intra-chunk**
+
+   | Métrica            | Descripción                  | Fórmula                                   |
+   | ------------------ | ---------------------------- | ----------------------------------------- |
+   | `local_cohesion`   | coherencia con el cluster    | $\cos(E_{c_i}, \bar{E}_{cluster})$        |
+   | `local_redundancy` | similitud con chunks vecinos | $\max_{j\neq i}\cos(E_{c_i},E_{c_j})$     |
+   | `novelty`          | información nueva            | $1 - local_redundancy$                    |
+   | `chunk_health`     | balance de calidad           | `local_cohesion × (1 - local_redundancy)` |
+
+   Estas métricas permiten identificar fragmentos repetitivos o irrelevantes.
+
+---
+
+7. **Salida (JSON)**
 
 ```json
 "topics_chunks": {
-  "reason": "chunk-fallback-small",
-  "n_samples": 3,
-  "n_topics": 1,
+  "reason": "chunk-hybrid",
+  "n_samples": 10,
+  "n_topics": 2,
   "keywords_global": ["diabetes","tratamiento","insulina"],
   "topics": [
-    {
-      "topic_id": 0,
-      "count": 3,
-      "exemplar": "Diabetes Tipo 2: Un enfoque clínico...",
-      "keywords": ["diabetes","complicaciones","tratamiento"]
-    }
-  ]
+    {"topic_id":0,"count":6,"exemplar":"Tratamiento prolongado con insulina...","keywords":["diabetes","tratamiento","efectos","insulina"]},
+    {"topic_id":1,"count":4,"exemplar":"Los síntomas clínicos incluyen...","keywords":["síntomas","fatiga","sed","clínico"]}
+  ],
+  "metrics": {
+    "coverage": 0.94,
+    "fallback_rate": 0.06,
+    "topic_coherence_local": 0.85,
+    "keywords_overlap": 0.70
+  }
 }
 ```
 
+---
+
+8. **Beneficios técnicos (chunk-level)**
+
+| Dimensión             | Mejora                                              |
+| --------------------- | --------------------------------------------------- |
+| Granularidad          | Detecta subtemas dentro de secciones extensas.      |
+| Consistencia vertical | Mantiene alineación semántica con tópicos globales. |
+| Resiliencia           | Funciona incluso con pocos chunks o texto corto.    |
+| Métricas internas     | Evalúa coherencia, redundancia y novedad.           |
+| Escalabilidad         | Procesa grandes volúmenes en paralelo.              |
+| Reutilización         | Aprovecha embeddings previos del doc-level.         |
 
 ---
 

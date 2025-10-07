@@ -45,15 +45,16 @@ stages:
 
   - name: schema-select
     args:
+      clean_outdir: true
       chunks_glob: "outputs_chunks/*.json"
       outdir: "outputs_schema"
       clean_outdir: true
 
       # --- Pesos de señales ---
-      alpha_kw: 0.30       # Keywords (léxica)
-      beta_emb: 0.25       # Embeddings (semántica densa)
-      gamma_ctx: 0.25      # Métricas contextuales (cohesión, health, novelty)
-      delta_top: 0.15      # Afinidad de tópicos globales/locales
+      alpha_kw: 0.35       # Keywords (léxica)
+      beta_emb: 0.35       # Embeddings (semántica densa)
+      gamma_ctx: 0.15      # Métricas contextuales (cohesión, health, novelty)
+      delta_top: 0.10      # Afinidad de tópicos globales/locales
       epsilon_prior: 0.05  # Priors (sesgos organizacionales)
 
       # --- Umbrales y control ---

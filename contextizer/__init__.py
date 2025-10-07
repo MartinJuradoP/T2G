@@ -35,7 +35,7 @@ if not logger.handlers:
 # ---------------------------------------------------------------------------
 # API pública del paquete
 # ---------------------------------------------------------------------------
-from .contextizer import run_contextizer_on_doc
+from .contextizer import route_contextizer_doc, route_contextizer_chunks
 from .schemas import TopicModelConfig, TopicsDocMeta, TopicItem, TopicsChunksMeta, ChunkTopic
 from .metrics import coverage, outlier_rate, topic_size_stats, keywords_diversity
 from .utils import prepare_text_for_topic, set_global_seeds

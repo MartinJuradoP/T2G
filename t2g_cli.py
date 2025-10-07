@@ -32,14 +32,18 @@ except ImportError:
 # Subsystems
 # ---------------------------------------------------------------------------
 from parser.parsers import Parser as DocParser
-from contextizer.contextizer import run_contextizer_on_doc, TopicModelConfig
-from contextizer.contextizer import run_contextizer_on_chunks
+from contextizer.contextizer import route_contextizer_doc, route_contextizer_chunks, TopicModelConfig
+
 from chunker import run as run_chunker, load_ir_with_topics, save_chunks
 from chunker.schemas import ChunkingConfig
 # Adaptive Schema Selector
 from schema_selector.selector import select_schemas
 from schema_selector.registry import REGISTRY
 from schema_selector.schemas import SelectorConfig
+
+import warnings
+warnings.filterwarnings("ignore", category=FutureWarning, module="transformers")
+
 
 
 # Stubs (para no romper imports; implementar en siguientes entregas)
@@ -116,7 +120,8 @@ def cmd_contextize_doc(args: argparse.Namespace) -> None:
     )
 
     for ir in args.ir_files:
-        run_contextizer_on_doc(ir, cfg, outdir=outdir)
+        route_contextizer_doc(ir, cfg, outdir=outdir)
+
 
 
 def cmd_chunk(args: argparse.Namespace) -> None:
@@ -150,7 +155,8 @@ def cmd_contextize_chunks(args: argparse.Namespace) -> None:
         cache_dir=args.cache_dir if hasattr(args, "cache_dir") else None,
     )
     for ch in args.chunk_files:
-        run_contextizer_on_chunks(ch, cfg)
+        route_contextizer_chunks(ch, cfg)
+
 
 
 def cmd_schema_select(args: argparse.Namespace) -> None:
