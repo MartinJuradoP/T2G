@@ -2,8 +2,8 @@
 
 **T2G** es una *pipeline modular y extensible* que convierte documentos heterogéneos (PDF, DOCX, imágenes) en una **Representación Intermedia (IR) homogénea**, los enriquece con **contexto semántico global y local**, y prepara la base para construir **grafos de conocimiento** y sistemas de **búsqueda avanzada (RAG, QA, compliance, etc.)**.
 
-* **Entrada (hoy):** PDF / DOCX / PNG / JPG
-* **Salidas (hoy):**
+* **Entrada :** PDF / DOCX / PNG / JPG
+* **Salidas :**
 
   * `DocumentIR (JSON)`
   * `DocumentIR+Topics (JSON)`
@@ -340,6 +340,7 @@ project_T2G/
 }
 ```
 
+
 ---
 
 ### 5) Adaptive Schema Selector ✅
@@ -347,48 +348,123 @@ project_T2G/
 **Entrada:** `Chunks+Topics` (`outputs_chunks/*.json`)
 **Salida:** `SchemaSelection` (`outputs_schema/*.json`)
 
+---
+
 **Qué hace:**
 
-El **Adaptive Schema Selector** determina dinámicamente qué **dominios de entidades** (ej. médico, legal, financiero, genérico) son relevantes para cada documento y chunk. Esto evita extraer entidades irrelevantes y mejora la **precisión** del grafo.
+El **Adaptive Schema Selector (ASS)** determina dinámicamente qué **dominios de entidades** (por ejemplo, médico, legal, financiero o genérico) son relevantes para cada documento y chunk.
+Su propósito es **filtrar, priorizar y contextualizar** los tipos de entidades que deben extraerse en las etapas siguientes, mejorando la **precisión semántica** del grafo y reduciendo ruido.
+
+---
 
 1. **Registro de dominios (`registry.py`)**
-   Cada dominio contiene:
 
-   * Entidades (`EntityTypeDef`) con atributos (ej. `Disease`, `Treatment`).
-   * Relaciones (`RelationTypeDef`) entre entidades.
-   * Aliases y vocabulario específico (ej. `"enfermedad"`, `"patología"` para `Disease`).
+   Cada dominio está definido en la ontología base (`registry.py`) y contiene:
+
+   * **Entidades (`EntityTypeDef`)** con atributos (por ejemplo: `Disease`, `Treatment`, `Contract`, `Transaction`).
+   * **Relaciones (`RelationTypeDef`)** entre entidades (por ejemplo: `treated_with`, `paid_by`, `binds`).
+   * **Aliases** y vocabulario específico en español e inglés (por ejemplo: `"enfermedad"`, `"patología"`, `"disease"` para `Disease`).
+   * **Descripciones semánticas** utilizadas para generar embeddings de referencia.
+
+   Los dominios incluidos en la versión `v2_bilingual` son:
+
+   | Dominio            | Ejemplo de entidades                                   | Contextos típicos                         |
+   | ------------------ | ------------------------------------------------------ | ----------------------------------------- |
+   | `medical`          | `Disease`, `Symptom`, `Drug`, `Treatment`, `LabTest`   | artículos clínicos, diagnósticos          |
+   | `legal`            | `Contract`, `Party`, `Obligation`, `Penalty`           | contratos, cláusulas, litigios            |
+   | `financial`        | `Invoice`, `Transaction`, `StockIndicator`, `Policy`   | facturas, informes financieros            |
+   | `reviews_and_news` | `Review`, `NewsArticle`, `MarketEvent`                 | reseñas, noticias económicas              |
+   | `ecommerce`        | `Order`, `Product`, `Review`                           | comercio electrónico, reseñas de clientes |
+   | `identity`         | `Person`, `Address`, `IDDocument`                      | registros, formularios                    |
+   | `generic`          | `Person`, `Organization`, `Date`, `Location`, `Amount` | fallback universal                        |
+
+---
 
 2. **Extracción de señales del documento/chunk**
 
-   * **Keywords**: se buscan overlaps entre tokens y aliases.
-   * **Embeddings**: se calcula similitud coseno entre centroides del texto y embeddings predefinidos de etiquetas (`label_vecs`).
-   * **Priors**: se aplican pesos de confianza inicial (ej. `generic` siempre se incluye con peso bajo).
+   El selector combina **tres tipos de señales** para estimar la afinidad de cada texto con los dominios registrados:
 
-3. **Fórmula de scoring (por dominio):**
+   * **Keywords**
+     Se detectan coincidencias entre los tokens normalizados del documento y los `aliases` del dominio.
+     Las coincidencias se ponderan por frecuencia y relevancia POS (sustantivos, nombres propios, etc.).
 
-   Para cada dominio (d):
+     $$
+     S_{kw}(d) = \frac{\text{overlaps}(d)}{\text{total aliases}(d)} \times \log(1 + f_{term})
+     $$
 
-$$
-\text{score}(d) = \alpha \cdot S_{\text{kw}}(d) + \beta \cdot S_{\text{emb}}(d) + \gamma \cdot P(d)
-$$
+     Donde:
 
-Donde:
+     * $\text{overlaps}(d)$ → número de alias del dominio encontrados.
 
-* $S_{\text{kw}}$: score normalizado por overlap de keywords.
-* $S_{\text{emb}}$: similitud coseno entre embeddings.
-* $P(d)$: prior asignado al dominio.
-* $\alpha, \beta, \gamma$ → hiperparámetros configurables en `SelectorConfig`.
+     * $f_{term}$ → frecuencia media de los términos coincidentes.
 
-**Ejemplo default:**
+     > Ejemplo: un documento con “contrato”, “firma”, “cláusula” activará el dominio `legal` con alto $S_{kw}$.
 
-$\alpha = 0.6, \beta = 0.3, \gamma = 0.1$ → más peso a keywords, menos a embeddings y priors.
+   * **Embeddings**
+     Calcula la similitud coseno entre los **embeddings promedio del texto** y los **embeddings representativos del dominio** (precalculados a partir de sus descripciones y aliases).
+
+     $$
+     S_{emb}(d) = \cos(\vec{v}*{text}, \vec{v}*{domain})
+     $$
+
+     * $\vec{v}_{text}$ → embedding medio del chunk o documento.
+
+     * $\vec{v}_{domain}$ → embedding medio del dominio.
+
+     > Ejemplo: “antihipertensivo” activa el dominio `medical` aunque la palabra “enfermedad” no aparezca explícitamente.
+
+   * **Priors**
+     Cada dominio tiene un peso base $P(d)$ que refleja su probabilidad a priori de aparecer.
+
+     $$
+     P(d) = \text{prior}(d) \in [0, 1]
+     $$
+
+     > Ejemplo: `generic = 0.1`, `medical = 0.05`, `legal = 0.05`
+     > El dominio `generic` siempre se considera como fallback.
+
+---
+
+3. **Fórmula de scoring (por dominio)**
+
+   Para cada dominio $d$, se calcula un score ponderado combinando las tres señales:
+
+   $$
+   \text{score}(d) = \alpha \cdot S_{kw}(d) + \beta \cdot S_{emb}(d) + \gamma \cdot P(d)
+   $$
+
+   Donde:
+
+   * $S_{kw}(d)$: score normalizado por coincidencia léxica.
+   * $S_{emb}(d)$: similitud coseno entre embeddings.
+   * $P(d)$: prior asignado al dominio.
+   * $\alpha, \beta, \gamma$: hiperparámetros configurables en `SelectorConfig`.
+
+   **Ejemplo default:**
+
+   $\alpha = 0.6, ; \beta = 0.3, ; \gamma = 0.1$
+
+   → más peso a keywords, menor a embeddings y priors.
+
+   > En textos técnicos (contratos, facturas) domina $\alpha$.
+   > En textos conceptuales (reseñas o informes), $\beta$ captura mejor la afinidad semántica.
+
+---
 
 4. **Selección final**
 
-   * Se ordenan los dominios por score.
-   * Se descartan dominios con score < `min_topic_conf`.
-   * Se seleccionan los `top-k` dominios (por config).
-   * Se marca `ambiguous=True` si la diferencia entre primer y segundo dominio < `ambiguity_threshold`.
+   Una vez calculados los scores, se aplica la fase de decisión:
+
+   * Se **ordenan** los dominios de mayor a menor score.
+   * Se **descartan** los dominios con score < `min_topic_conf`.
+   * Se **seleccionan** los `top-k` dominios configurados (por defecto `topk_domains = 2`).
+   * Se marca `ambiguous=True` si la diferencia entre el primer y segundo dominio es menor al margen definido:
+
+     $$
+     ambiguous = |S(d_1) - S(d_2)| < \tau
+     $$
+
+     donde $\tau$ es `ambiguity_threshold` (por defecto 0.1).
    * Siempre se incluye el dominio **genérico** como fallback (`allow_fallback_generic=True`).
 
 ---
@@ -398,20 +474,38 @@ $\alpha = 0.6, \beta = 0.3, \gamma = 0.1$ → más peso a keywords, menos a embe
 ```json
 {
   "doc": {
-    "doc_id": "DOC-123",
-    "top_domains": ["medical"],
+    "doc_id": "DOC-CA28DAF58CC7",
+    "top_domains": ["financial", "reviews_and_news"],
     "ambiguous": false,
     "domain_scores": [
-      {"domain":"medical","score":0.18,"evidence":[{"kind":"keyword","detail":{"overlap":2,"kw_score":0.2}},{"kind":"stat","detail":{"alpha":0.6,"beta":0.3}}]},
-      {"domain":"legal","score":0.05,"evidence":[{"kind":"keyword","detail":{"overlap":0,"kw_score":0.0}}]}
+      {
+        "domain": "financial",
+        "score": 0.27,
+        "evidence": [
+          {"kind": "keyword", "detail": {"match": ["pago","banco","transacción"], "kw_score": 0.23}},
+          {"kind": "embedding", "detail": {"cosine": 0.84}},
+          {"kind": "prior", "detail": {"value": 0.05}}
+        ]
+      },
+      {
+        "domain": "reviews_and_news",
+        "score": 0.15,
+        "evidence": [
+          {"kind": "keyword", "detail": {"match": ["noticia","acciones"], "kw_score": 0.11}},
+          {"kind": "embedding", "detail": {"cosine": 0.72}}
+        ]
+      }
     ]
   },
   "chunks": [
     {
-      "chunk_id": "DOC-123_0001",
-      "top_domain": "medical",
+      "chunk_id": "DOC-CA28DAF58CC7_0001",
+      "top_domain": "financial",
       "ambiguous": false,
-      "domain_scores": [...]
+      "domain_scores": [
+        {"domain": "financial", "score": 0.31},
+        {"domain": "reviews_and_news", "score": 0.12}
+      ]
     }
   ],
   "meta": {
@@ -419,10 +513,47 @@ $\alpha = 0.6, \beta = 0.3, \gamma = 0.1$ → más peso a keywords, menos a embe
     "beta": 0.3,
     "gamma": 0.1,
     "always_include": ["generic"],
-    "ambiguity_threshold": 0.1
+    "ambiguity_threshold": 0.1,
+    "registry_version": "v2_bilingual"
   }
 }
 ```
+
+---
+
+**Notas adicionales:**
+
+* La afinidad entre dominios puede ajustarse con un refuerzo contextual:
+
+  $$
+  S_{\text{adj}}(d, c_i)
+  = S_{\text{domain}}(d, c_i)\,\times\,
+  \Big(1 + \lambda \cdot \text{cohesion\_vs\_doc}(c_i)\Big)
+  $$
+
+  donde \\( \lambda = 0.2 \\) pondera la cohesión semántica entre chunk y documento.
+
+* La inferencia final combina contexto global y local:
+
+  $$
+  S_{\text{final}}(d)
+  = \omega \cdot S_{\text{doc}}(d)
+  + (1 - \omega) \cdot \frac{1}{N}\sum_{i=1}^{N} S_{\text{chunk}}(d, c_i)
+  $$
+
+  con \\( \omega = 0.5 \\) por defecto.
+
+
+
+---
+
+**Beneficios:**
+
+* **Precisión contextual:** sólo se procesan entidades coherentes con el dominio dominante.
+* **Escalabilidad:** nuevos dominios pueden añadirse fácilmente al `registry.py`.
+* **Interpretabilidad:** cada decisión conserva su `evidence_trace` (palabras clave, similitudes, priors).
+* **Auditable:** todos los pesos, fórmulas y umbrales se guardan en el `meta` del JSON.
+* **Consistencia vertical:** mantiene coherencia entre documento y chunks.
 
 ---
 
@@ -522,40 +653,111 @@ python t2g_cli.py pipeline-yaml
 
 ## 📊 Métricas por subsistema
 
-### Parser 
+---
 
-* `percent_docs_ok`: éxito de parseo por lote.
-* `layout_loss`: pérdida de estructura.
-* `table_consistency`: tablas detectadas vs esperadas.
+### Parser 
+Evalúa la calidad y consistencia del parseo de documentos heterogéneos.
+
+- `percent_docs_ok`: proporción de documentos parseados sin errores.
+- `layout_loss`: pérdida de estructura visual o de formato.
+- `table_consistency`: coherencia entre tablas detectadas y esperadas.
+- `ocr_ratio`: porcentaje de páginas procesadas mediante OCR (indicador de calidad visual).
+- `avg_parse_time`: tiempo promedio de procesamiento por documento.
+- `block_density`: número promedio de bloques válidos por página.
+
+---
 
 ### Contextizer (doc-level) 
+Mide la calidad del modelado temático global.
 
-* `coverage`: proporción de chunks asignados a algún tópico.
-* `outlier_rate`: ratio de outliers vs asignaciones válidas.
-* `topic_size_stats`: distribución (min, mediana, p95).
-* `keywords_diversity`: diversidad de keywords únicas.
+- `coverage`: proporción de bloques asignados a algún tópico.
+- `outlier_rate`: ratio de bloques descartados por ruido o baja densidad.
+- `topic_size_stats`: distribución del tamaño de clusters (`min`, `median`, `p95`).
+- `keywords_diversity`: diversidad de palabras clave únicas (riqueza semántica).
+- `topic_stability`: correlación promedio entre embeddings de tópicos en runs sucesivos (indicador de consistencia temporal).
+- `topic_entropy`: medida de dispersión temática (mayor = más heterogeneidad).
 
-### HybridChunker**
+---
 
-* `chunk_length_stats`: distribución de tamaño en caracteres/tokens.
-* `cohesion_vs_doc`: similitud coseno chunk ↔ doc (coherencia semántica global).
-* `max_redundancy`: similitud máxima entre chunks (redundancia bruta).
-* `redundancy_norm`: redundancia normalizada según longitud media del documento  
-  *(penaliza fragmentos largos y repetitivos)*.
+### HybridChunker 
+Evalúa la **coherencia**, **redundancia** y **salud semántica** de los fragmentos.
+
+#### 🔹 Métricas base
+- `chunk_length_stats`: distribución de tamaños (caracteres / tokens).
+- `cohesion_vs_doc`: similitud coseno entre embedding de chunk y embedding global del documento.  
+  $$\text{cohesion\_vs\_doc}(c_i) = \cos(\vec{c_i}, \bar{\vec{D}})$$
+- `max_redundancy`: similitud máxima entre embeddings de chunks.  
+  $$\text{max redundancy}(c_i) = \max_{j \neq i} \cos(\vec{c_i}, \vec{c_j})$$
+- `redundancy_norm`: redundancia ajustada por longitud.  
+  $$\text{redundancy norm}(c_i) = \text{max redundancy}(c_i) \times \frac{\text{len}(c_i)}{\text{avg len(chunks)}}$$
+- `novelty`: proporción de información nueva aportada.  
+  $$\text{novelty}(c_i) = 1 - \text{max redundancy}(c_i)$$
+
+#### 🔹 Métricas compuestas
+- `chunk_health`: salud semántica = cohesión × (1 − redundancia).  
+  $$\text{chunk health}(c_i) = \text{cohesion\_vs\_doc}(c_i) \times (1 - \text{max redundancy}(c_i))$$
+- `semantic_density`: proporción de tokens relevantes (sin stopwords) sobre el total.
+- `lexical_density`: densidad léxica medida por términos significativos / totales.
+- `type_token_ratio`: diversidad de vocabulario (variedad léxica).
+- `semantic_coverage`: % de chunks con cohesión ≥ 0.7 (bien alineados al documento).
+- `redundancy_flag_rate`: % de chunks con redundancia excesiva ≥ 0.6.
+- `topic_affinity_blend`: afinidad semántico-léxica con los tópicos globales del documento.  
+  $$\text{topic affinity blend}(c,t) = \alpha \cos(\vec{c}, \vec{t}) + (1-\alpha)J(c,t)$$
+
+#### 🔹 Métricas globales
+- `global_health_score`: indicador compuesto (`good`, `moderate`, `poor`).
+- `avg_chunk_health`: promedio de salud semántica global.
+- `coverage_ratio`: proporción de texto total cubierto por chunks válidos.
+- `oversegmentation_rate`: % de chunks demasiado pequeños (bajo umbral `min_chars`).
+- `undersegmentation_rate`: % de chunks demasiado largos (superan `max_tokens`).
+
+---
+
+### Contextizer (chunk-level) 
+Evalúa la coherencia temática local y su relación con los tópicos globales.
+
+- `coverage`: % de chunks con tópico asignado.
+- `fallback_rate`: % de documentos donde se usó fallback en lugar de BERTopic.
+- `topic_size_stats`: distribución de tamaños de subtemas.
+- `keywords_overlap`: solapamiento promedio entre keywords globales y locales.
+- `topic_coherence_local`: coherencia intracluster promedio (similitud coseno media entre embeddings de un mismo tema).
+- `local_entropy`: dispersión de tópicos locales (mide estabilidad semántica).
+
+---
+
+### Adaptive Schema Selector 
+Evalúa la **relevancia y precisión contextual** del mapeo dominio–documento.
+
+#### 🔹 Métricas base
+- `domain_score_distribution`: histograma de scores por dominio.  
+  $$\text{score}(d) = \alpha S_{\text{kw}}(d) + \beta S_{\text{emb}}(d) + \gamma P(d)$$
+- `coverage_domains`: número promedio de dominios relevantes por documento.
+- `ambiguity_rate`: % de documentos o chunks marcados como `ambiguous = True`.
+- `domain_confidence_gap`: diferencia entre el primer y segundo dominio (medida de separabilidad).
+- `prior_influence`: peso efectivo de los priors sobre el score final.
+- `always_included_rate`: % de documentos donde el dominio genérico fue incluido por fallback.
+
+#### 🔹 Métricas de refuerzo contextual
+- `contextual_boost_effect`: variación media del score tras aplicar refuerzo semántico.  
+  $$\Delta S = S_{\text{adj}} - S_{\text{domain}}$$
+- `lambda_effectiveness`: sensibilidad del refuerzo de cohesión (variación promedio por unidad de λ).  
+  $$\eta_\lambda = \frac{\Delta S}{\lambda}$$
+
+#### 🔹 Métricas de calidad ontológica
+- `schema_alignment`: similitud promedio entre entidades detectadas y entidades esperadas del dominio.
+- `entity_type_coverage`: % de tipos de entidad del dominio detectados al menos una vez.
+- `relation_type_coverage`: % de relaciones del dominio identificadas.
+- `ontology_diversity`: número de dominios distintos presentes en el corpus.
+
+#### 🔹 Métricas globales
+- `domain_precision`: proporción de dominios correctamente asignados (vs. gold standard si existe).
+- `domain_recall`: proporción de dominios relevantes detectados.
+- `domain_f1`: media armónica entre precisión y recall (solo si hay ground truth disponible).
+- `evidence_trace`: trazabilidad completa de evidencias (keywords, embeddings, priors, scores).
+
+---
 
 
-### Contextizer (chunk-level)**
-
-  * `coverage`: % de chunks con topic asignado.
-  * `fallback_rate`: % de documentos donde se usó fallback vs BERTopic.
-  * `topic_size_stats`: tamaño medio de clusters locales.
-
-### Adaptive Schema Selector**
-
-  * `domain_score_distribution`: histograma de scores por dominio.
-  * `ambiguity_rate`: % de documentos/chunks con `ambiguous=True`.
-  * `coverage_domains`: promedio de dominios relevantes por documento.
-  * `evidence_trace`: lista de evidencias usadas para cada score (auditoría).
 
 ---
 

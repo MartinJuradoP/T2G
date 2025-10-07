@@ -23,37 +23,30 @@ from __future__ import annotations
 from typing import List, Dict, Optional, Union, Any
 from pydantic import BaseModel, Field, field_validator
 from datetime import datetime
-import json
-
-
-# ---------------------------------------------------------------------------
-# Tipos básicos
-# ---------------------------------------------------------------------------
 
 Number = Union[int, float]
 
 
 # ---------------------------------------------------------------------------
-# Ontología
+# 🔹 Ontología (sin cambios de fondo; se añaden validadores ligeros)
 # ---------------------------------------------------------------------------
 
 class AttributeDef(BaseModel):
-    """Definición de un atributo dentro de una entidad."""
-    name: str = Field(..., description="Nombre lógico del atributo (ej. 'fecha_nacimiento').")
-    type: str = Field("string", description="Tipo de dato: string | number | date | id | code.")
-    required: bool = Field(False, description="Si el atributo es obligatorio en todas las instancias.")
-    description: Optional[str] = Field(None, description="Descripción semántica del atributo.")
+    name: str = Field(..., description="Nombre lógico del atributo.")
+    type: str = Field("string", description="string|number|date|id|code")
+    required: bool = False
+    description: Optional[str] = None
 
     @field_validator("type")
-    def check_valid_type(cls, v):
+    @classmethod
+    def _validate_type(cls, v: str) -> str:
         allowed = {"string", "number", "date", "id", "code"}
         if v not in allowed:
-            raise ValueError(f"Tipo no válido: {v}. Debe estar en {allowed}")
+            raise ValueError(f"Tipo inválido '{v}'. Debe ser uno de {allowed}")
         return v
 
 
 class EntityTypeDef(BaseModel):
-    """Definición de un tipo de entidad dentro de un dominio."""
     name: str
     aliases: List[str] = Field(default_factory=list)
     attributes: List[AttributeDef] = Field(default_factory=list)
@@ -61,7 +54,6 @@ class EntityTypeDef(BaseModel):
 
 
 class RelationTypeDef(BaseModel):
-    """Definición de una relación entre entidades dentro de un dominio."""
     name: str
     head: str
     tail: str
@@ -70,24 +62,18 @@ class RelationTypeDef(BaseModel):
 
 
 class OntologyDomain(BaseModel):
-    """Dominio ontológico con sus entidades, relaciones y alias."""
     domain: str
     aliases: List[str] = Field(default_factory=list)
     entity_types: List[EntityTypeDef] = Field(default_factory=list)
     relation_types: List[RelationTypeDef] = Field(default_factory=list)
+    # Opcional: prototipos semánticos del dominio (si están disponibles)
     label_vecs: Dict[str, List[Number]] = Field(default_factory=dict)
-
-    def list_entities(self) -> List[str]:
-        """Devuelve los nombres de las entidades definidas en este dominio."""
-        return [et.name for et in self.entity_types]
 
 
 class OntologyRegistry(BaseModel):
-    """Registro global de dominios disponibles para selección adaptativa."""
     domains: List[OntologyDomain] = Field(default_factory=list)
 
     def get_domain(self, name: str) -> Optional[OntologyDomain]:
-        """Devuelve un dominio por nombre (case-insensitive)."""
         for d in self.domains:
             if d.domain.lower() == name.lower():
                 return d
@@ -95,151 +81,125 @@ class OntologyRegistry(BaseModel):
 
 
 # ---------------------------------------------------------------------------
-# Evidencia y Scoring
+# 🔹 Evidencias, trazabilidad y scoring
 # ---------------------------------------------------------------------------
 
 class Evidence(BaseModel):
-    """Evidencia que justifica una puntuación (para auditoría)."""
-    kind: str = Field(..., description="Tipo: keyword | embedding | stat | heuristic.")
-    detail: Dict[str, Union[str, Number]] = Field(default_factory=dict)
+    """Evidencia auditable que respalda un score."""
+    kind: str = Field(..., description="keyword|embedding|topic|context|prior")
+    detail: Dict[str, Any] = Field(default_factory=dict)
 
-    def __str__(self):
-        return f"[{self.kind}] {self.detail}"
+
+class DecisionTrace(BaseModel):
+    """
+    Rastro de decisión cuantitativo por dominio:
+    - Sub-scores por señal (K/E/T/C/P)
+    - Pesos efectivos
+    - Contribuciones al score final
+    """
+    domain: str
+    keyword_score: float = 0.0  # K
+    embedding_score: float = 0.0  # E
+    topic_score: float = 0.0  # T (topic_affinity)
+    context_score: float = 0.0  # C (cohesion, health, novelty, redundancy, richness)
+    prior: float = 0.0  # P
+    weights: Dict[str, float] = Field(default_factory=dict)  # {"alpha_kw":..., ...}
+    contributions: Dict[str, float] = Field(default_factory=dict)  # {"K": α*K, ...}
+    final_score: float = 0.0
+    used_signals: List[str] = Field(default_factory=list)
+    notes: Optional[str] = None
 
 
 class EntityTypeScore(BaseModel):
-    """Puntuación de un tipo de entidad dentro de un dominio."""
     type_name: str
-    score: float = Field(..., ge=0.0, le=1.0)
+    score: float
     evidence: List[Evidence] = Field(default_factory=list)
-
-    @field_validator("type_name")
-    def strip_name(cls, v):
-        return v.strip()
-
-    def summary(self) -> str:
-        return f"{self.type_name}: {self.score:.2f}"
 
 
 class DomainScore(BaseModel):
-    """Puntuación global de un dominio, incluyendo breakdown por entidades."""
     domain: str
-    score: float = Field(..., ge=0.0, le=1.0)
+    score: float
     entity_type_scores: List[EntityTypeScore] = Field(default_factory=list)
     evidence: List[Evidence] = Field(default_factory=list)
-
-    def top_entity_types(self, k: int = 3) -> List[str]:
-        """Devuelve los top-k entity types mejor puntuados del dominio."""
-        sorted_types = sorted(self.entity_type_scores, key=lambda x: x.score, reverse=True)
-        return [et.type_name for et in sorted_types[:k]]
+    decision_trace: Optional[DecisionTrace] = None
 
 
 # ---------------------------------------------------------------------------
-# Selección de Esquemas (Chunk / Documento / Final)
+# 🔹 Selecciones por Chunk y por Documento
 # ---------------------------------------------------------------------------
 
 class ChunkSchemaSelection(BaseModel):
-    """Selección de esquemas aplicada a un chunk."""
     chunk_id: str
     domain_scores: List[DomainScore] = Field(default_factory=list)
     top_domain: Optional[str] = None
+    selected_schema: Optional[str] = None
+    schema_confidence: float = 0.0
+    explanation: Optional[str] = None
+    signals_used: List[str] = Field(default_factory=list)
+    weights_used: Dict[str, float] = Field(default_factory=dict)
     ambiguous: bool = False
 
 
 class DocSchemaSelection(BaseModel):
-    """Selección de esquemas a nivel de documento completo."""
     doc_id: str
     created_at: datetime = Field(default_factory=datetime.utcnow)
     domain_scores: List[DomainScore] = Field(default_factory=list)
     top_domains: List[str] = Field(default_factory=list)
+    selected_schema: Optional[str] = None
+    schema_confidence: float = 0.0
+    explanation: Optional[str] = None
+    signals_used: List[str] = Field(default_factory=list)
+    weights_used: Dict[str, float] = Field(default_factory=dict)
     ambiguous: bool = False
 
 
 class SchemaSelection(BaseModel):
-    """Selección final de esquemas (documento + chunks)."""
     doc: DocSchemaSelection
     chunks: List[ChunkSchemaSelection] = Field(default_factory=list)
-    meta: Dict[str, Union[str, int, float, List[str]]] = Field(
-        default_factory=dict,
-        description="Metadatos: hiperparámetros, versión, dominios incluidos, tiempos, etc."
-    )
-
-    def to_json(self, indent: int = 2) -> str:
-        """Serializa el objeto a JSON con indentación."""
-        return self.model_dump_json(indent=indent)
-
-    def to_dict(self) -> Dict[str, Any]:
-        """Convierte a dict estándar."""
-        return self.model_dump()
+    meta: Dict[str, Any] = Field(default_factory=dict)
 
     def summary(self) -> str:
-        """Devuelve un resumen en texto plano."""
         return (
-            f"Doc={self.doc.doc_id}, "
-            f"TopDomains={self.doc.top_domains}, "
-            f"Chunks={len(self.chunks)}, "
-            f"Ambiguous={self.doc.ambiguous}"
+            f"Doc={self.doc.doc_id}, TopDomains={self.doc.top_domains}, "
+            f"Schema={self.doc.selected_schema}, Confidence={self.doc.schema_confidence:.2f}, "
+            f"Chunks={len(self.chunks)}"
         )
 
 
 # ---------------------------------------------------------------------------
-# Configuración del Adaptive Schema Selector
+# 🔹 Configuración del Selector (v2)
 # ---------------------------------------------------------------------------
 
 class SelectorConfig(BaseModel):
-    """
-    Configuración del Adaptive Schema Selector.
-
-    Hiperparámetros:
-    - always_include: dominios que siempre deben incluirse (ej. 'generic').
-    - min_topic_conf: confianza mínima para considerar un tópico.
-    - max_domains: máximo de dominios seleccionables.
-    - allow_fallback_generic: si True, siempre incluir 'generic'.
-    - alpha_kw, beta_emb, gamma_prior: pesos para combinación de scores.
-    - ambiguity_threshold: umbral para marcar ambigüedad.
-    - topk: número máximo de dominios a devolver.
-    - version: para trazabilidad.
-    """
+    # Dominios
     always_include: List[str] = Field(default_factory=lambda: ["generic"])
-    min_topic_conf: float = Field(0.2, ge=0.0, le=1.0)
-    max_domains: int = Field(5, ge=1)
-    allow_fallback_generic: bool = Field(True)
+    max_domains: int = 5
+    topk: int = 5
+    allow_fallback_generic: bool = True
 
-    alpha_kw: float = Field(0.6, ge=0.0, le=1.0)
-    beta_emb: float = Field(0.3, ge=0.0, le=1.0)
-    gamma_prior: float = Field(0.1, ge=0.0, le=1.0)
+    # Pesos (α, β, γ, δ, ε) para K, E, C, T, P respectivamente
+    alpha_kw: float = 0.30
+    beta_emb: float = 0.20
+    gamma_ctx: float = 0.25
+    delta_top: float = 0.20  # topic_affinity
+    epsilon_prior: float = 0.05
 
-    ambiguity_threshold: float = Field(0.15, ge=0.0, le=1.0)
-    topk: int = Field(5, ge=1)
+    # Umbrales y temperatura softmax
+    ambiguity_threshold: float = 0.12
+    fallback_threshold: float = 0.40
+    softmax_temperature: float = 0.85  # T < 1 endurece diferencias
 
-    version: str = Field("selector.v1")
+    # Heurísticas de textos cortos
+    min_doc_tokens_for_domain: int = 14  # por debajo, favorece 'generic' salvo evidencia fuerte
 
-    def __str__(self) -> str:
-        return (
-            f"SelectorConfig("
-            f"always_include={self.always_include}, "
-            f"min_topic_conf={self.min_topic_conf}, "
-            f"max_domains={self.max_domains}, "
-            f"allow_fallback_generic={self.allow_fallback_generic}, "
-            f"alpha_kw={self.alpha_kw}, beta_emb={self.beta_emb}, gamma_prior={self.gamma_prior}, "
-            f"ambiguity_threshold={self.ambiguity_threshold}, topk={self.topk}, "
-            f"version={self.version})"
-        )
+    # Versión
+    version: str = "selector.v2"
 
-
-# ---------------------------------------------------------------------------
-# Reconstrucción de Modelos (obligatorio Pydantic v2)
-# ---------------------------------------------------------------------------
-
-SchemaSelection.model_rebuild()
-DocSchemaSelection.model_rebuild()
-ChunkSchemaSelection.model_rebuild()
-DomainScore.model_rebuild()
-EntityTypeScore.model_rebuild()
-Evidence.model_rebuild()
-OntologyDomain.model_rebuild()
-EntityTypeDef.model_rebuild()
-RelationTypeDef.model_rebuild()
-AttributeDef.model_rebuild()
-OntologyRegistry.model_rebuild()
-SelectorConfig.model_rebuild()
+    def weights(self) -> Dict[str, float]:
+        return {
+            "alpha_kw": self.alpha_kw,
+            "beta_emb": self.beta_emb,
+            "gamma_ctx": self.gamma_ctx,
+            "delta_top": self.delta_top,
+            "epsilon_prior": self.epsilon_prior,
+        }

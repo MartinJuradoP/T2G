@@ -155,44 +155,45 @@ def cmd_contextize_chunks(args: argparse.Namespace) -> None:
 
 def cmd_schema_select(args: argparse.Namespace) -> None:
     """
-    Ejecuta Adaptive Schema Selector (Etapa 5).
-    - Toma DocumentChunks con topics (outputs_chunks).
-    - Genera SchemaSelection JSON (outputs_schema).
+    Ejecuta Adaptive Schema Selector 2.0.
+    - Entrada: DocumentChunks con topics (outputs_chunks/*.json)
+    - Salida:  SchemaSelection JSON (outputs_schema/*.json)
     """
     outdir = Path(getattr(args, "outdir", "outputs_schema"))
     if getattr(args, "clean_outdir", False):
         _maybe_clean(outdir, "schema-select")
     outdir.mkdir(parents=True, exist_ok=True)
 
+    # Configuración del selector v2
     cfg = SelectorConfig(
         alpha_kw=args.alpha_kw,
         beta_emb=args.beta_emb,
-        gamma_prior=args.gamma_prior,
-        ambig_margin=args.ambig_margin,
-        topk_domains=args.topk_domains,
-        topk_entity_types=args.topk_entity_types,
+        gamma_ctx=args.gamma_ctx,
+        delta_top=args.delta_top,
+        epsilon_prior=args.epsilon_prior,
+        ambiguity_threshold=args.ambig_threshold,
+        fallback_threshold=args.fallback_threshold,
+        softmax_temperature=args.softmax_temp,
+        topk=args.topk_domains,
+        max_domains=args.max_domains,
+        allow_fallback_generic=not args.disable_generic,
     )
 
     for ch_path in args.chunk_files:
         ch_path = Path(ch_path)
         if not ch_path.exists():
-            logger.warning("[SCHEMA-SELECT] archivo no encontrado: %s", ch_path)
+            logger.warning("[SCHEMA-SELECT] Archivo no encontrado: %s", ch_path)
             continue
 
-        # cargar chunks
         doc = json.loads(ch_path.read_text(encoding="utf-8"))
-
-        # ejecutar selector
         schema_sel = select_schemas(doc, registry=REGISTRY, config=cfg)
 
-        # guardar salida
-        out_path = outdir / f"{doc.get('doc_id','UNKNOWN')}_schema.json"
+        out_path = outdir / f"{doc.get('doc_id', 'UNKNOWN')}_schema.json"
         out_path.write_text(
             json.dumps(schema_sel.model_dump(mode="json"), indent=2, ensure_ascii=False),
             encoding="utf-8"
         )
         logger.info("[SCHEMA-SELECT OK] %s → %s", ch_path, out_path)
-
 
 # ============================================================================
 # Pipeline YAML
@@ -263,14 +264,26 @@ def cmd_pipeline_yaml(args: argparse.Namespace) -> None:
                 chunk_files=chunk_files,
                 outdir=sargs.get("outdir", "outputs_schema"),
                 clean_outdir=sargs.get("clean_outdir", False),
-                alpha_kw=sargs.get("alpha_kw", 0.6),
-                beta_emb=sargs.get("beta_emb", 0.3),
-                gamma_prior=sargs.get("gamma_prior", 0.1),
-                ambig_margin=sargs.get("ambig_margin", 0.08),
-                topk_domains=sargs.get("topk_domains", 2),
-                topk_entity_types=sargs.get("topk_entity_types", 5),
+
+                # --- Pesos de señales ---
+                alpha_kw=sargs.get("alpha_kw", 0.30),
+                beta_emb=sargs.get("beta_emb", 0.25),
+                gamma_ctx=sargs.get("gamma_ctx", 0.25),
+                delta_top=sargs.get("delta_top", 0.15),
+                epsilon_prior=sargs.get("epsilon_prior", 0.05),
+
+                # --- Umbrales ---
+                ambig_threshold=sargs.get("ambig_threshold", 0.12),
+                fallback_threshold=sargs.get("fallback_threshold", 0.40),
+                softmax_temp=sargs.get("softmax_temp", 0.85),
+                disable_generic=sargs.get("disable_generic", False),
+
+                # --- Control de dominios ---
+                topk_domains=sargs.get("topk_domains", 5),
+                max_domains=sargs.get("max_domains", 5),
             )
             cmd_schema_select(ns)
+
 
 
 # ============================================================================
@@ -321,17 +334,31 @@ def build_t2g_cli() -> argparse.ArgumentParser:
     cc.set_defaults(func=cmd_contextize_chunks)
 
     # schema-select
-    ss = cmds.add_parser("schema-select", help="Selecciona esquemas adaptativos (Adaptive Schema Selector)")
+    ss = cmds.add_parser("schema-select", help="Ejecuta Adaptive Schema Selector 2.0")
     ss.add_argument("chunk_files", nargs="+", help="Archivos JSON de DocumentChunks")
     ss.add_argument("--outdir", default="outputs_schema", help="Directorio de salida")
     ss.add_argument("--clean-outdir", action="store_true", help="Limpiar directorio antes de generar salida")
-    ss.add_argument("--alpha-kw", type=float, default=0.6, help="Peso de keywords")
-    ss.add_argument("--beta-emb", type=float, default=0.3, help="Peso de embeddings")
-    ss.add_argument("--gamma-prior", type=float, default=0.1, help="Peso de priors")
-    ss.add_argument("--ambig-margin", type=float, default=0.08, help="Margen de ambigüedad para marcar empate")
-    ss.add_argument("--topk-domains", type=int, default=2, help="N dominios a reportar en doc-level")
-    ss.add_argument("--topk-entity-types", type=int, default=5, help="N entity types a reportar por dominio")
+
+    # --- Pesos de señales ---
+    ss.add_argument("--alpha-kw", type=float, default=0.30, help="Peso de keywords (léxica)")
+    ss.add_argument("--beta-emb", type=float, default=0.25, help="Peso de embeddings (semántica densa)")
+    ss.add_argument("--gamma-ctx", type=float, default=0.25, help="Peso de métricas contextuales (cohesión, health, novelty)")
+    ss.add_argument("--delta-top", type=float, default=0.15, help="Peso de afinidad de tópicos globales/locales")
+    ss.add_argument("--epsilon-prior", type=float, default=0.05, help="Peso de priors (sesgos organizacionales)")
+
+    # --- Umbrales y control ---
+    ss.add_argument("--ambig-threshold", type=float, default=0.12, help="Margen de ambigüedad (|S1−S2|<τ)")
+    ss.add_argument("--fallback-threshold", type=float, default=0.40, help="Confianza mínima antes de fallback genérico")
+    ss.add_argument("--softmax-temp", type=float, default=0.85, help="Temperatura del softmax (confianza)")
+    ss.add_argument("--disable-generic", action="store_true", help="Desactivar fallback genérico")
+
+    # --- Control de dominios ---
+    ss.add_argument("--topk-domains", type=int, default=5, help="Cuántos dominios se devuelven en doc-level")
+    ss.add_argument("--max-domains", type=int, default=5, help="Máximo de dominios a evaluar")
+
     ss.set_defaults(func=cmd_schema_select)
+
+
 
     # pipeline-yaml
     py = cmds.add_parser("pipeline-yaml", help="Ejecuta pipeline desde YAML")

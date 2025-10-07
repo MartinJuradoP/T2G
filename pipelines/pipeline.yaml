@@ -19,7 +19,7 @@ stages:
       clean_outdir: true
       ir_glob: "outputs_ir/*.json"
       embedding_model: "all-MiniLM-L6-v2"
-      nr_topics: null     # null → None
+      nr_topics: null
       seed: 42
       outdir: "outputs_doc_topics"
 
@@ -48,9 +48,20 @@ stages:
       chunks_glob: "outputs_chunks/*.json"
       outdir: "outputs_schema"
       clean_outdir: true
-      alpha_kw: 0.6
-      beta_emb: 0.3
-      gamma_prior: 0.1
-      ambig_margin: 0.08
-      topk_domains: 2
-      topk_entity_types: 5
+
+      # --- Pesos de señales ---
+      alpha_kw: 0.30       # Keywords (léxica)
+      beta_emb: 0.25       # Embeddings (semántica densa)
+      gamma_ctx: 0.25      # Métricas contextuales (cohesión, health, novelty)
+      delta_top: 0.15      # Afinidad de tópicos globales/locales
+      epsilon_prior: 0.05  # Priors (sesgos organizacionales)
+
+      # --- Umbrales y control ---
+      ambig_threshold: 0.12        # Diferencia mínima para marcar ambigüedad
+      fallback_threshold: 0.40     # Confianza mínima antes de fallback genérico
+      softmax_temp: 0.85           # Temperatura del softmax (confianza)
+      disable_generic: false       # Si true, no aplica fallback 'generic'
+
+      # --- Selección de dominios ---
+      topk_domains: 5              # Cuántos dominios devuelve a nivel doc
+      max_domains: 5               # Máximo de dominios evaluados
