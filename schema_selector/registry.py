@@ -2,45 +2,162 @@
 """
 registry.py — Ontología de dominios y entidades para Adaptive Schema Selector.
 
-Define una ontología de dominios comunes (medical, legal, identity, tech_review,
-financial, ecommerce, veterinary, geopolitical, reviews_and_news, generic)
-que sirven como catálogo base para la detección de entidades y relaciones
-en documentos heterogéneos.
+Este módulo define la ontología base utilizada por el subsistema
+**Adaptive Schema Selector** dentro de la pipeline T2G.
 
-Cada dominio:
-- Tiene alias (palabras clave para detección de contexto).
-- Define entidades (EntityTypeDef) con atributos relevantes.
-- Define relaciones entre entidades.
-- Es extensible y modular: se pueden añadir nuevos dominios fácilmente.
+Su función principal es proporcionar un **catálogo estructurado de dominios**
+(legal, financiero, médico, tecnológico, etc.) con sus correspondientes
+entidades, atributos y relaciones, para permitir que el selector determine
+de forma automática qué esquema de extracción aplicar a cada documento.
 
-El dominio genérico (generic) se incluye siempre como fallback universal.
+Cada dominio contiene:
+- **Aliases:** palabras clave o expresiones asociadas al dominio, usadas
+  para la detección contextual en los textos.
+- **Negative Aliases:** términos que, si aparecen, penalizan la selección
+  de ese dominio (ayudan a reducir falsos positivos).
+- **Stopwords:** palabras genéricas que no aportan valor discriminativo.
+- **Entity Types:** definiciones de entidades con sus atributos relevantes.
+- **Relation Types:** relaciones semánticas entre entidades del mismo dominio.
+- **Schema Name:** nombre del esquema que se usará para la extracción NER/RE
+  cuando este dominio sea detectado.
+
+Características clave:
+----------------------
+- **Extensible:** se pueden añadir o modificar dominios sin afectar al resto del sistema.
+- **Modular:** cada dominio encapsula su propio conjunto de entidades y relaciones.
+- **Auditable:** permite inspeccionar la cobertura léxica y solapamientos entre dominios.
+- **Compatibilidad total:** puede ser consumido por el Adaptive Schema Selector
+  y otros componentes que requieran información de contexto o estructura semántica.
+
+El dominio **generic** se incluye siempre como fallback universal y actúa como
+esquema de respaldo cuando el documento no puede asociarse claramente a un dominio
+específico.
 """
 
 from __future__ import annotations
+from typing import List, Dict, Set, Optional
+from pydantic import BaseModel, Field, model_validator
+from collections import defaultdict
+import json
+import pandas as pd
+
+# Importamos las estructuras base
 from .schemas import (
-    OntologyRegistry,
     OntologyDomain,
+    OntologyRegistry,
     EntityTypeDef,
     AttributeDef,
-    RelationTypeDef,
+    RelationTypeDef
 )
 
+# ===========================================================================
+# 🧩 Clases extendidas con validación y trazabilidad
+# ===========================================================================
+
+class OntologyDomain(OntologyDomain):
+    """Extiende OntologyDomain con soporte para alias negativos, stopwords y auditoría."""
+
+    stopwords: Set[str] = Field(default_factory=set, description="Palabras genéricas a ignorar.")
+    negative_aliases: Set[str] = Field(default_factory=set, description="Términos que penalizan la selección del dominio.")
+    weight: float = Field(default=1.0, description="Peso relativo del dominio.")
+    schema_name: str = Field(default="generic_text_v1", description="Nombre del esquema asociado al dominio.")
+    notes: Optional[str] = None
+
+    @model_validator(mode="after")
+    def validate_aliases(self) -> "OntologyDomain":
+        """Valida y normaliza alias, stopwords y negativos."""
+        self.aliases = sorted(set(a.strip().lower() for a in self.aliases if a))
+        self.stopwords = set(w.lower().strip() for w in self.stopwords)
+        self.negative_aliases = set(w.lower().strip() for w in self.negative_aliases)
+
+        # Evita conflictos entre listas
+        overlap = set(self.aliases) & set(self.negative_aliases)
+        if overlap:
+            raise ValueError(f"Alias conflictivos en dominio '{self.domain}': {overlap}")
+        return self
+
+    def describe(self, max_entities: int = 3) -> str:
+        """Devuelve un resumen legible del dominio y sus componentes."""
+        ents = ", ".join(e.name for e in self.entity_types[:max_entities])
+        rels = ", ".join(r.name for r in self.relation_types[:max_entities])
+        return (
+            f"🔹 {self.domain.upper()} — {len(self.aliases)} alias "
+            f"({len(self.entity_types)} entidades, {len(self.relation_types)} relaciones)\n"
+            f"  Ejemplos entidades: {ents or 'N/A'}\n"
+            f"  Relaciones: {rels or 'N/A'}\n"
+        )
+
+
+class OntologyRegistry(OntologyRegistry):
+    """Ontología global con validación y funciones de auditoría."""
+
+    domains: List[OntologyDomain] = Field(default_factory=list)
+
+    @model_validator(mode="after")
+    def validate_unique_domains(self) -> "OntologyRegistry":
+        names = [d.domain.lower() for d in self.domains]
+        if len(names) != len(set(names)):
+            raise ValueError(f"Dominios duplicados detectados: {names}")
+        return self
+
+    # ----------------------------------------------------------------------
+    # Funciones de auditoría y control de calidad
+    # ----------------------------------------------------------------------
+    def summary_table(self) -> pd.DataFrame:
+        """Muestra un resumen tabular de todos los dominios definidos."""
+        data = []
+        for d in self.domains:
+            data.append({
+                "Domain": d.domain,
+                "#Aliases": len(d.aliases),
+                "#Stopwords": len(d.stopwords),
+                "#Negatives": len(d.negative_aliases),
+                "#Entities": len(d.entity_types),
+                "#Relations": len(d.relation_types),
+                "Weight": d.weight,
+                "Schema": d.schema_name
+            })
+        return pd.DataFrame(data).sort_values(by="Domain")
+
+    def conflicts_matrix(self) -> pd.DataFrame:
+        """Matriz de solapamiento de alias entre dominios (para detectar ambigüedad léxica)."""
+        doms = [d.domain for d in self.domains]
+        overlap = defaultdict(dict)
+        for d1 in self.domains:
+            for d2 in self.domains:
+                if d1.domain == d2.domain:
+                    overlap[d1.domain][d2.domain] = 1.0
+                else:
+                    inter = len(set(d1.aliases) & set(d2.aliases))
+                    total = len(set(d1.aliases) | set(d2.aliases))
+                    overlap[d1.domain][d2.domain] = inter / max(1, total)
+        return pd.DataFrame(overlap).T.loc[doms, doms]
+
+    def export_json(self, path: str = "registry_audit.json") -> None:
+        """Exporta la ontología completa a JSON (para auditoría o versionado)."""
+        with open(path, "w", encoding="utf-8") as f:
+            json.dump(self.model_dump(mode="json"), f, indent=2, ensure_ascii=False)
+        print(f"✅ Ontología exportada a {path}")
 # ===========================================================================
 # 🩺 MEDICAL Domain
 # ===========================================================================
 MEDICAL = OntologyDomain(
     domain="medical",
+    schema_name="medical_note_v1",
+    weight=1.0,
     aliases=[
         "salud", "clínico", "médico", "paciente", "síntoma", "tratamiento",
-        "hospital", "doctor", "medicina", "fármaco", "insulina", "diagnóstico",
+        "hospital", "doctor", "medicina", "fármaco", "diagnóstico",
         "enfermedad", "health", "clinical", "medical", "patient", "disease",
         "treatment", "therapy", "hospital", "drug", "vaccine"
     ],
+    negative_aliases={"contrato", "invoice", "review"},
+    stopwords={"caso", "registro", "documento"},
     entity_types=[
         EntityTypeDef(
             name="Disease",
             description="Illness or pathology affecting a patient.",
-            aliases=["enfermedad", "patología", "dx", "disease", "condition"],
+            aliases=["enfermedad", "patología", "disease", "condition"],
             attributes=[
                 AttributeDef(name="name"),
                 AttributeDef(name="icd_code", type="code")
@@ -55,26 +172,10 @@ MEDICAL = OntologyDomain(
         EntityTypeDef(
             name="Drug",
             description="Medication or compound used in treatment.",
-            aliases=["fármaco", "medicamento", "medicine", "drug"],
+            aliases=["fármaco", "medicamento", "drug"],
             attributes=[
                 AttributeDef(name="name"),
                 AttributeDef(name="dose", type="string")
-            ]
-        ),
-        EntityTypeDef(
-            name="Treatment",
-            description="Therapeutic or surgical procedure.",
-            aliases=["tratamiento", "terapia", "therapy"],
-            attributes=[AttributeDef(name="name")]
-        ),
-        EntityTypeDef(
-            name="LabTest",
-            description="Laboratory analysis or diagnostic test.",
-            aliases=["análisis", "laboratorio", "test", "glucosa", "hemoglobina", "lab"],
-            attributes=[
-                AttributeDef(name="test_name"),
-                AttributeDef(name="value", type="number"),
-                AttributeDef(name="unit", type="string")
             ]
         ),
         EntityTypeDef(
@@ -89,10 +190,9 @@ MEDICAL = OntologyDomain(
         ),
     ],
     relation_types=[
-        RelationTypeDef(name="has_symptom", head="Disease", tail="Symptom", description="Disease presents a symptom."),
-        RelationTypeDef(name="treated_with", head="Disease", tail="Drug", description="Disease treated with a drug."),
-        RelationTypeDef(name="confirmed_by", head="Disease", tail="LabTest", description="Disease confirmed by a lab test."),
-        RelationTypeDef(name="attended_by", head="Patient", tail="Doctor", description="Patient attended by a doctor."),
+        RelationTypeDef(name="has_symptom", head="Disease", tail="Symptom"),
+        RelationTypeDef(name="treated_with", head="Disease", tail="Drug"),
+        RelationTypeDef(name="attended_by", head="Patient", tail="Doctor"),
     ],
 )
 
@@ -101,16 +201,20 @@ MEDICAL = OntologyDomain(
 # ===========================================================================
 LEGAL = OntologyDomain(
     domain="legal",
+    schema_name="legal_contract_v1",
+    weight=1.0,
     aliases=[
         "contrato", "cláusula", "firma", "notario", "juicio", "sentencia",
         "demanda", "acuerdo", "penalización", "contract", "agreement", "clause",
         "signature", "trial", "lawsuit", "court", "penalty", "liability", "claim"
     ],
+    negative_aliases={"hospital", "doctor", "disease"},
+    stopwords={"documento", "registro", "caso"},
     entity_types=[
         EntityTypeDef(
             name="Party",
             description="Person or organization in a legal agreement.",
-            aliases=["parte", "firmante", "persona", "empresa", "party", "signatory"],
+            aliases=["parte", "firmante", "persona", "empresa", "party"],
             attributes=[AttributeDef(name="name"), AttributeDef(name="role")]
         ),
         EntityTypeDef(
@@ -126,7 +230,7 @@ LEGAL = OntologyDomain(
         EntityTypeDef(
             name="Obligation",
             description="Duty or responsibility from a contract.",
-            aliases=["obligación", "responsabilidad", "duty", "liability"],
+            aliases=["obligación", "responsabilidad", "duty"],
             attributes=[AttributeDef(name="description")]
         ),
         EntityTypeDef(
@@ -140,84 +244,9 @@ LEGAL = OntologyDomain(
         ),
     ],
     relation_types=[
-        RelationTypeDef(name="binds", head="Contract", tail="Party", description="Contract binds a party."),
-        RelationTypeDef(name="imposes", head="Contract", tail="Obligation", description="Contract imposes an obligation."),
-        RelationTypeDef(name="penalizes", head="Obligation", tail="Penalty", description="Obligation leads to a penalty."),
-    ],
-)
-
-# ===========================================================================
-# 🪪 IDENTITY Domain
-# ===========================================================================
-IDENTITY = OntologyDomain(
-    domain="identity",
-    aliases=[
-        "identificación", "id", "dni", "ine", "rfc", "curp", "pasaporte", "licencia",
-        "identity", "passport", "id card", "driver license", "ssn", "nif"
-    ],
-    entity_types=[
-        EntityTypeDef(
-            name="Person",
-            description="Individual identified by a name or document.",
-            aliases=["nombre", "persona", "person", "individual"],
-            attributes=[AttributeDef(name="full_name")]
-        ),
-        EntityTypeDef(
-            name="IDDocument",
-            description="Document identifying a person.",
-            aliases=["identificación", "id", "passport", "license", "document"],
-            attributes=[
-                AttributeDef(name="id_type"),
-                AttributeDef(name="id_number", type="id")
-            ]
-        ),
-        EntityTypeDef(
-            name="Address",
-            description="Physical address or residence.",
-            aliases=["domicilio", "dirección", "address", "residence"],
-            attributes=[
-                AttributeDef(name="line1"),
-                AttributeDef(name="city"),
-                AttributeDef(name="state"),
-                AttributeDef(name="postal_code")
-            ]
-        ),
-    ],
-    relation_types=[
-        RelationTypeDef(name="identified_by", head="Person", tail="IDDocument", description="Person identified by an ID."),
-        RelationTypeDef(name="resides_at", head="Person", tail="Address", description="Person resides at an address."),
-    ],
-)
-
-# ===========================================================================
-# 💻 TECH REVIEW Domain
-# ===========================================================================
-TECH = OntologyDomain(
-    domain="tech_review",
-    aliases=[
-        "benchmark", "reseña", "modelo", "gpu", "cpu", "latencia", "precisión", "tecnología",
-        "hardware", "software", "review", "performance", "specs", "accuracy", "ai", "model","technology","data"
-    ],
-    entity_types=[
-        EntityTypeDef(
-            name="Product",
-            description="Hardware or software under evaluation.",
-            aliases=["producto", "modelo", "device", "software", "hardware"],
-            attributes=[AttributeDef(name="name"), AttributeDef(name="vendor"), AttributeDef(name="category")]
-        ),
-        EntityTypeDef(
-            name="Metric",
-            description="Performance or quality measure.",
-            aliases=["latencia", "tiempo", "fps", "precisión", "metric", "speed", "accuracy"],
-            attributes=[
-                AttributeDef(name="metric_name"),
-                AttributeDef(name="value", type="number"),
-                AttributeDef(name="unit", type="string")
-            ]
-        ),
-    ],
-    relation_types=[
-        RelationTypeDef(name="has_metric", head="Product", tail="Metric", description="Product evaluated by a metric."),
+        RelationTypeDef(name="binds", head="Contract", tail="Party"),
+        RelationTypeDef(name="imposes", head="Contract", tail="Obligation"),
+        RelationTypeDef(name="penalizes", head="Obligation", tail="Penalty"),
     ],
 )
 
@@ -226,17 +255,22 @@ TECH = OntologyDomain(
 # ===========================================================================
 FINANCIAL = OntologyDomain(
     domain="financial",
+    schema_name="financial_tx_v2",
+    weight=1.0,
     aliases=[
-        "finanzas", "factura", "transacción", "pago", "banco", "seguro", "mercado", "divisa",
-        "acción", "presupuesto", "bolsa", "cotización", "exchange", "finance", "investment",
-        "stock", "currency", "insurance", "loan", "interest", "policy","equity","patrimonio","banco","bank","EPS","acciones","dividendos","dividends"
-        ,"earnings","revenue","ingresos","financials","financieros","trading","comercio","trader","inversor","investor"
+        "finanzas", "factura", "transacción", "pago", "banco", "seguro", "mercado",
+        "divisa", "acción", "presupuesto", "bolsa", "cotización", "exchange",
+        "finance", "investment", "stock", "currency", "insurance", "loan",
+        "interest", "policy", "equity", "earnings", "revenue", "ingresos",
+        "financials", "trading", "comercio"
     ],
+    negative_aliases={"hospital", "doctor", "contract", "disease"},
+    stopwords={"monto", "total", "fecha"},
     entity_types=[
         EntityTypeDef(
             name="Invoice",
             description="Document for transaction of goods or services.",
-            aliases=["factura", "recibo", "invoice"],
+            aliases=["factura", "invoice"],
             attributes=[
                 AttributeDef(name="invoice_number"),
                 AttributeDef(name="amount", type="number"),
@@ -246,7 +280,7 @@ FINANCIAL = OntologyDomain(
         EntityTypeDef(
             name="Transaction",
             description="Movement of money between accounts.",
-            aliases=["pago", "transferencia", "transaction", "deposit"],
+            aliases=["pago", "transferencia", "transaction"],
             attributes=[
                 AttributeDef(name="transaction_id"),
                 AttributeDef(name="amount", type="number"),
@@ -256,46 +290,57 @@ FINANCIAL = OntologyDomain(
         EntityTypeDef(
             name="Account",
             description="Financial account identifier.",
-            aliases=["cuenta", "iban", "account", "bank"],
+            aliases=["cuenta", "account", "bank"],
             attributes=[
                 AttributeDef(name="account_number"),
                 AttributeDef(name="bank", type="string")
             ]
         ),
+    ],
+    relation_types=[
+        RelationTypeDef(name="paid_by", head="Transaction", tail="Account"),
+        RelationTypeDef(name="covered_by", head="Invoice", tail="Policy"),
+    ],
+)
+
+# ===========================================================================
+# 💻 TECH REVIEW Domain
+# ===========================================================================
+TECH = OntologyDomain(
+    domain="tech_review",
+    schema_name="tech_review_v1",
+    weight=0.9,
+    aliases=[
+        "benchmark", "reseña", "modelo", "gpu", "cpu", "latencia", "precisión",
+        "tecnología", "hardware", "software", "review", "performance", "specs",
+        "accuracy", "ai", "model", "technology", "data", "inference", "training"
+    ],
+    negative_aliases={"contract", "disease", "invoice"},
+    stopwords={"comparativa", "prueba", "resultado"},
+    entity_types=[
         EntityTypeDef(
-            name="Policy",
-            description="Insurance or coverage policy.",
-            aliases=["póliza", "seguro", "policy", "insurance"],
+            name="Product",
+            description="Hardware or software under evaluation.",
+            aliases=["producto", "modelo", "device", "software", "hardware"],
             attributes=[
-                AttributeDef(name="policy_id"),
-                AttributeDef(name="coverage", type="string")
+                AttributeDef(name="name"),
+                AttributeDef(name="vendor"),
+                AttributeDef(name="category")
             ]
         ),
         EntityTypeDef(
-            name="StockIndicator",
-            description="Market or stock index performance indicator.",
-            aliases=["acción", "índice", "stock", "ticker", "equity"],
+            name="Metric",
+            description="Performance or quality measure.",
+            aliases=["latencia", "tiempo", "fps", "precisión", "metric", "accuracy"],
             attributes=[
-                AttributeDef(name="symbol"),
-                AttributeDef(name="price", type="number"),
-                AttributeDef(name="change_percent", type="number")
-            ]
-        ),
-        EntityTypeDef(
-            name="ExchangeRate",
-            description="Conversion rate between currencies.",
-            aliases=["tipo de cambio", "exchange rate", "forex"],
-            attributes=[
-                AttributeDef(name="from_currency"),
-                AttributeDef(name="to_currency"),
-                AttributeDef(name="rate", type="number")
+                AttributeDef(name="metric_name"),
+                AttributeDef(name="value", type="number"),
+                AttributeDef(name="unit", type="string")
             ]
         ),
     ],
     relation_types=[
-        RelationTypeDef(name="paid_by", head="Transaction", tail="Account", description="Transaction paid by account."),
-        RelationTypeDef(name="covered_by", head="Invoice", tail="Policy", description="Invoice covered by a policy."),
-        RelationTypeDef(name="quoted_in", head="StockIndicator", tail="ExchangeRate", description="Stock quoted in a currency."),
+        RelationTypeDef(name="has_metric", head="Product", tail="Metric"),
     ],
 )
 
@@ -304,10 +349,14 @@ FINANCIAL = OntologyDomain(
 # ===========================================================================
 ECOMMERCE = OntologyDomain(
     domain="ecommerce",
+    schema_name="ecommerce_order_v1",
+    weight=1.0,
     aliases=[
         "carrito", "pedido", "compra", "precio", "producto", "cliente",
-        "order", "purchase", "product", "customer", "store"
+        "order", "purchase", "product", "customer", "store", "review", "seller"
     ],
+    negative_aliases={"hospital", "contract", "disease"},
+    stopwords={"artículo", "comentario", "item"},
     entity_types=[
         EntityTypeDef(
             name="Order",
@@ -340,8 +389,8 @@ ECOMMERCE = OntologyDomain(
         ),
     ],
     relation_types=[
-        RelationTypeDef(name="contains", head="Order", tail="Product", description="Order contains a product."),
-        RelationTypeDef(name="reviewed_by", head="Product", tail="Review", description="Product reviewed by a customer."),
+        RelationTypeDef(name="contains", head="Order", tail="Product"),
+        RelationTypeDef(name="reviewed_by", head="Product", tail="Review"),
     ],
 )
 
@@ -350,16 +399,23 @@ ECOMMERCE = OntologyDomain(
 # ===========================================================================
 VETERINARY = OntologyDomain(
     domain="veterinary",
+    schema_name="veterinary_case_v1",
+    weight=0.9,
     aliases=[
-        "animal", "mascota", "veterinario", "síntoma", "tratamiento", "ganado",
-        "pet", "vet", "cattle", "disease"
+        "animal", "mascota", "veterinario", "síntoma", "tratamiento",
+        "ganado", "pet", "vet", "cattle", "disease", "vacuna", "zoonosis"
     ],
+    negative_aliases={"contrato", "invoice", "court"},
+    stopwords={"caso", "registro", "historia"},
     entity_types=[
         EntityTypeDef(
             name="Animal",
             description="Animal or pet under veterinary care.",
             aliases=["mascota", "animal", "pet", "dog", "cat"],
-            attributes=[AttributeDef(name="species"), AttributeDef(name="breed")]
+            attributes=[
+                AttributeDef(name="species"),
+                AttributeDef(name="breed")
+            ]
         ),
         EntityTypeDef(
             name="Disease",
@@ -375,8 +431,8 @@ VETERINARY = OntologyDomain(
         ),
     ],
     relation_types=[
-        RelationTypeDef(name="treated_with", head="Animal", tail="Treatment", description="Animal treated with a treatment."),
-        RelationTypeDef(name="has_disease", head="Animal", tail="Disease", description="Animal diagnosed with a disease."),
+        RelationTypeDef(name="treated_with", head="Animal", tail="Treatment"),
+        RelationTypeDef(name="has_disease", head="Animal", tail="Disease"),
     ],
 )
 
@@ -385,16 +441,24 @@ VETERINARY = OntologyDomain(
 # ===========================================================================
 GEO = OntologyDomain(
     domain="geopolitical",
+    schema_name="geopolitical_event_v1",
+    weight=0.8,
     aliases=[
         "país", "ciudad", "estado", "frontera", "conflicto", "tratado",
-        "country", "city", "state", "border", "conflict", "treaty", "agreement"
+        "country", "city", "state", "border", "conflict", "treaty", "agreement",
+        "nación", "territorio", "guerra", "alianza", "summit"
     ],
+    negative_aliases={"contract", "hospital", "invoice"},
+    stopwords={"caso", "zona", "región"},
     entity_types=[
         EntityTypeDef(
             name="Country",
             description="Nation or sovereign state.",
             aliases=["país", "nación", "country"],
-            attributes=[AttributeDef(name="name"), AttributeDef(name="iso_code")]
+            attributes=[
+                AttributeDef(name="name"),
+                AttributeDef(name="iso_code")
+            ]
         ),
         EntityTypeDef(
             name="City",
@@ -413,8 +477,8 @@ GEO = OntologyDomain(
         ),
     ],
     relation_types=[
-        RelationTypeDef(name="located_in", head="City", tail="Country", description="City located in a country."),
-        RelationTypeDef(name="involves", head="Event", tail="Country", description="Event involves a country."),
+        RelationTypeDef(name="located_in", head="City", tail="Country"),
+        RelationTypeDef(name="involves", head="Event", tail="Country"),
     ],
 )
 
@@ -423,10 +487,15 @@ GEO = OntologyDomain(
 # ===========================================================================
 REVIEWS = OntologyDomain(
     domain="reviews_and_news",
+    schema_name="review_text_v1",
+    weight=0.8,
     aliases=[
         "review", "reseña", "comentario", "opinión", "feedback", "news",
-        "noticia", "artículo", "prensa", "report", "headline","calificación","score"
+        "noticia", "artículo", "prensa", "report", "headline", "calificación",
+        "score", "rating"
     ],
+    negative_aliases={"contract", "disease", "invoice"},
+    stopwords={"texto", "contenido", "nota"},
     entity_types=[
         EntityTypeDef(
             name="Review",
@@ -450,40 +519,30 @@ REVIEWS = OntologyDomain(
                 AttributeDef(name="sentiment", type="string")
             ]
         ),
-        EntityTypeDef(
-            name="MarketEvent",
-            description="Event affecting market or economy.",
-            aliases=["crisis", "subida", "baja", "market event", "announcement"],
-            attributes=[
-                AttributeDef(name="event_type"),
-                AttributeDef(name="impact")
-            ]
-        ),
     ],
     relation_types=[
-        RelationTypeDef(name="authored_by", head="Review", tail="Person", description="Review authored by a person."),
-        RelationTypeDef(name="published_by", head="NewsArticle", tail="Organization", description="News published by an organization."),
-        RelationTypeDef(name="describes_event", head="NewsArticle", tail="MarketEvent", description="News describes a market event."),
+        RelationTypeDef(name="published_by", head="NewsArticle", tail="Organization"),
+        RelationTypeDef(name="authored_by", head="Review", tail="Person"),
     ],
 )
 
 # ===========================================================================
-# 🧩 GENERIC Domain (Always included)
+# 🧩 GENERIC Domain (fallback universal)
 # ===========================================================================
 GENERIC = OntologyDomain(
     domain="generic",
+    schema_name="generic_text_v1",
+    weight=0.5,
     aliases=[
         "general", "documento", "texto", "registro", "file", "document", "record", "text"
     ],
+    stopwords={"contenido", "archivo", "formato"},
     entity_types=[
-        EntityTypeDef(name="Person", aliases=["persona", "nombre", "user", "patient"]),
-        EntityTypeDef(name="Organization", aliases=["empresa", "institución", "organization", "company"]),
-        EntityTypeDef(name="IDNumber", aliases=["id", "rfc", "curp", "ssn", "identifier"]),
-        EntityTypeDef(name="Date", aliases=["fecha", "día", "mes", "año", "date"]),
-        EntityTypeDef(name="Location", aliases=["ubicación", "ciudad", "estado", "país", "address"]),
-        EntityTypeDef(name="PhoneNumber", aliases=["teléfono", "móvil", "celular", "phone"]),
-        EntityTypeDef(name="Email", aliases=["correo", "email", "mail"]),
-        EntityTypeDef(name="Amount", aliases=["monto", "precio", "costo", "valor", "usd", "mxn", "amount"]),
+        EntityTypeDef(name="Person", aliases=["persona", "nombre", "user"]),
+        EntityTypeDef(name="Organization", aliases=["empresa", "institución", "organization"]),
+        EntityTypeDef(name="Date", aliases=["fecha", "día", "año", "date"]),
+        EntityTypeDef(name="Location", aliases=["ubicación", "ciudad", "país", "address"]),
+        EntityTypeDef(name="Amount", aliases=["monto", "precio", "valor", "amount"]),
     ],
 )
 
@@ -492,7 +551,7 @@ GENERIC = OntologyDomain(
 # ===========================================================================
 REGISTRY = OntologyRegistry(
     domains=[
-        MEDICAL, LEGAL, IDENTITY, TECH, FINANCIAL,
+        MEDICAL, LEGAL, FINANCIAL, TECH,
         ECOMMERCE, VETERINARY, GEO, REVIEWS, GENERIC
     ]
 )
