@@ -145,6 +145,10 @@ from .utils import (
 )
 from .registry import REGISTRY
 
+from .registry_embeddings import build_label_vecs
+
+# Inicializa embeddings (usa cache si existe)
+REGISTRY = build_label_vecs()
 
 # Mapeo dominio → plantilla de esquema (ajústalo a tus plantillas reales)
 SCHEMA_BY_DOMAIN = {
@@ -284,7 +288,7 @@ def _select_doc_level(doc: Dict[str, Any],
             evidence=ev,
             decision_trace=trace
         ))
-
+     
     # Rank y top-domains
     domain_scores.sort(key=lambda d: d.score, reverse=True)
     top_domains = [d.domain for d in domain_scores[:cfg.topk]]

@@ -16,11 +16,51 @@ from typing import List, Dict, Any, Tuple, Iterable
 import numpy as np
 import re
 from math import exp
+import unicodedata
 
+import spacy
+
+try:
+    nlp_en = spacy.load("en_core_web_sm")
+except Exception:
+    nlp_en = None
+
+try:
+    nlp_es = spacy.load("es_core_news_sm")
+except Exception:
+    nlp_es = None
 
 # ---------------------------------------------------------------------------
 # 🔹 Texto y tokens
 # ---------------------------------------------------------------------------
+
+def normalize_text(text: str, lang: str | None = None) -> str:
+    """
+    Normaliza texto antes del matching:
+    - Minúsculas, sin acentos ni signos
+    - Limpieza de puntuación y dígitos
+    - Lematización básica (según idioma, si spaCy disponible)
+    """
+    if not text:
+        return ""
+
+    # Lowercase + quitar acentos
+    import unicodedata, re
+    text = text.lower()
+    text = unicodedata.normalize("NFKD", text).encode("ascii", "ignore").decode("utf-8", "ignore")
+    text = re.sub(r"[^a-z\s]", " ", text)
+    text = re.sub(r"\s+", " ", text).strip()
+
+    # Detecta idioma simple por presencia de letras comunes
+    global nlp_en, nlp_es
+    lang = lang or ("es" if any(ch in text for ch in "áéíóúñ") else "en")
+
+    nlp = nlp_es if lang == "es" and nlp_es else nlp_en
+    if nlp:
+        doc = nlp(text)
+        text = " ".join([tok.lemma_ for tok in doc if not tok.is_stop and len(tok) > 2])
+
+    return text
 
 def normalize_keyword(text: str) -> str:
     return text.lower().strip() if text else ""
@@ -133,17 +173,31 @@ def keyword_f1(doc_kws: List[str], domain_aliases: List[str]) -> Tuple[float, Di
       P = matches / len(doc_kws)
       R = matches / len(domain_aliases)
       F1 = 2PR/(P+R)
+    Aplica normalización robusta para evitar falsos negativos (GPU/gpu, PyTorch/pytorch, etc.)
     """
     if not doc_kws or not domain_aliases:
         return 0.0, {"matches": 0, "precision": 0.0, "recall": 0.0}
-    a_doc = set(doc_kws)
-    a_dom = set(unique_norm(domain_aliases))
+
+    # Normalizamos ambas listas
+    doc_norm = [normalize_text(k) for k in doc_kws]
+    dom_norm = [normalize_text(a) for a in domain_aliases]
+
+    a_doc = set(x for x in doc_norm if x)
+    a_dom = set(x for x in dom_norm if x)
+
     inter = a_doc & a_dom
     matches = len(inter)
     precision = matches / max(1, len(a_doc))
     recall = matches / max(1, len(a_dom))
     f1 = 0.0 if precision + recall == 0 else (2 * precision * recall) / (precision + recall)
-    return float(f1), {"matches": matches, "precision": precision, "recall": recall}
+
+    return float(f1), {
+        "matches": matches,
+        "precision": precision,
+        "recall": recall,
+        "overlap_terms": sorted(list(inter))
+    }
+
 
 
 def topic_affinity_score(doc: Dict[str, Any], domain_aliases: List[str]) -> Tuple[float, Dict[str, Any]]:

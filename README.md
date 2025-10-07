@@ -72,6 +72,7 @@ project_T2G/
 │   └── __init__.py
 │
 ├── schema_selector/                 # Adaptive Schema Selector
+│   ├── registry_embeddings.py       # Genera Embedings desde Registry
 │   ├── registry.py                  # Ontologías y dominios (medical, legal, etc.)
 │   ├── schemas.py                   # Contratos Pydantic
 │   ├── selector.py                  # Lógica de scoring y selección adaptativa
@@ -164,13 +165,18 @@ project_T2G/
 
 Se usa el modelo configurado (`SentenceTransformer` con `cfg.embedding_model`).
 
-$E_i = f_{ST}(b_i)$
+
+```math
+E_i = f_ST(b_i)
+```
 
 donde cada $E_i$ es un vector en $\mathbb{R}^d$.
 
 Luego se calcula un vector promedio para representar el contexto general del documento:
 
-$\bar{E}_{doc} = \frac{1}{n}\sum_{i=1}^{n} E_i$
+```math
+Ē_doc = (1/n) × Σ E_i
+```
 
 Este embedding global sirve para medir coherencia temática y variación semántica entre bloques.
 
@@ -201,11 +207,18 @@ Este paso evita usar métodos costosos de clustering o reducción de dimensión 
 
 Se aplica **DBSCAN** directamente sobre los embeddings para detectar grupos semánticos sin predefinir `n_topics`:
 
-$$\text{cluster}(E_i) = \begin{cases} k, & \text{si } \text{dist}_{\text{cosine}}(E_i, E_j) < \varepsilon \\ -1, & \text{ruido} \end{cases}$$
+
+```math
+cluster(E_i) =
+  { k,  si  dist_cosine(E_i, E_j) < ε
+   -1, si ruido }
+```
 
 Parámetros:
 
-$\varepsilon = 0.25, \quad \text{min\_samples}=2$
+```math
+ε = 0.25 ;  min_samples = 2
+```
 
 La ventaja de DBSCAN es que **no requiere conocer cuántos temas existen**; se adapta a la estructura semántica del documento.
 
@@ -243,8 +256,10 @@ Se combina información de tres fuentes:
 
 3. **Cohesión semántica (embeddings):**
 
-   $S_{\text{emb}}(w) = \frac{1}{k}\sum_{i=1}^{k}\cos(\vec{E_i}, \vec{w})$
 
+```math
+S_hybrid(w) = 0.5·S_tfidf(w) + 0.3·S_keybert(w) + 0.2·S_emb(w)
+```
 Las tres se fusionan ponderadamente:
 
 $S_{\text{hybrid}}(w) = 0.5 S_{\text{tfidf}}(w) + 0.3 S_{\text{keybert}}(w) + 0.2 S_{\text{emb}}(w)$
@@ -739,6 +754,120 @@ Una vez calculados los scores, se aplica la fase de decisión:
 * **Interpretabilidad:** cada decisión conserva su `evidence_trace` (palabras clave, similitudes, priors).
 * **Auditable:** todos los pesos, fórmulas y umbrales se guardan en el `meta` del JSON.
 * **Consistencia vertical:** mantiene coherencia entre documento y chunks.
+
+---
+
+---
+
+#### 5.1 **Generación y Consumo de Embeddings de Dominios (`registry_embeddings.py`)**
+
+El módulo `registry_embeddings.py` genera los **vectores semánticos representativos** de cada dominio definido en la ontología (`registry.py`).
+Estos embeddings sirven como **referencia base** para calcular la similitud coseno entre el texto (documento o chunk) y los dominios disponibles durante la selección adaptativa.
+
+---
+
+##### 1. **Ejecución del generador**
+
+El generador puede ejecutarse de dos maneras equivalentes:
+
+```bash
+# Opción 1 — Modo directo
+python schema_selector/registry_embeddings.py
+
+# Opción 2 — Modo paquete (recomendada)
+python -m schema_selector.registry_embeddings
+```
+
+En ambos casos, el script:
+
+1. Carga los dominios y sus aliases desde `registry.py`.
+2. Usa el modelo `all-MiniLM-L6-v2` (el mismo del Contextizer) para obtener embeddings por alias.
+3. Calcula el **centroide normalizado** de cada dominio (promedio vectorial de sus aliases).
+4. Guarda los resultados en un archivo de cache local:
+
+```
+schema_selector/registry_vectors.json
+```
+
+---
+
+##### 2. **Ejemplo de salida**
+
+```bash
+Embeddings cargados desde cache (9 dominios, 0 faltantes).
+Archivo: /Users/martinjurado/Desktop/prjs/T2G/schema_selector/registry_vectors.json
+Recalculando embeddings de dominios...
+Embeddings de dominios guardados en /Users/martinjurado/Desktop/prjs/T2G/schema_selector/registry_vectors.json
+Validación: 9/9 dominios con embeddings (384 dim).
+```
+
+Cada dominio queda asociado a un vector `centroid` de 384 dimensiones, por ejemplo:
+
+```json
+{
+  "medical": {
+    "centroid": [0.123, -0.045, 0.078, ...]
+  },
+  "legal": {
+    "centroid": [0.102, -0.030, 0.091, ...]
+  }
+}
+```
+
+---
+
+##### 3. **Relación con el Adaptive Schema Selector**
+
+Durante la etapa de selección (`selector.py`), estos embeddings son **automáticamente cargados** al inicializar el módulo.
+Cada dominio del registro (`OntologyDomain`) posee ahora un atributo adicional:
+
+```python
+domain.label_vecs["centroid"]
+```
+
+El selector utiliza estos vectores para calcular el componente de **similitud semántica**:
+
+```math
+S_emb(d) = cos(v_text, v_domain)
+```
+
+donde:
+
+* `v_text` → embedding promedio del documento o chunk, obtenido con el mismo modelo del **Contextizer**.
+* `v_domain` → centroide precomputado y persistido en `registry_vectors.json`.
+
+---
+
+##### 4. **Sincronización y regeneración**
+
+Cuando se agregan nuevos dominios o aliases en `registry.py`, es necesario **recalcular los embeddings** para mantener la coherencia semántica:
+
+```bash
+python -m schema_selector.registry_embeddings
+```
+
+Esto sobrescribe el archivo `registry_vectors.json` con los nuevos centroides, sin afectar al registro base.
+
+---
+
+##### 5. **Integración con el flujo del pipeline**
+
+El proceso completo puede representarse así:
+
+```
+registry.py → registry_embeddings.py → registry_vectors.json → selector.py → outputs_schema/*.json
+```
+
+1. `registry.py` define dominios, entidades, relaciones y aliases.
+2. `registry_embeddings.py` transforma esos aliases en embeddings promedio (centroides).
+3. `registry_vectors.json` almacena los vectores de referencia por dominio.
+4. `selector.py` carga y compara estos vectores contra los embeddings de cada documento/chunk.
+5. El resultado se refleja en `outputs_schema/*.json`, con los scores de afinidad por dominio.
+
+---
+
+**Beneficio principal:**
+La incorporación del archivo `registry_vectors.json` permite **medir afinidad semántica real**, no solo coincidencia léxica, habilitando detección de contexto incluso cuando no aparecen términos literales del dominio (por ejemplo, “cláusula de confidencialidad” activa `legal` aunque no diga “contrato”).
 
 ---
 

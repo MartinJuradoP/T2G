@@ -51,7 +51,7 @@ from .schemas import (
 )
 
 # ===========================================================================
-# 🧩 Clases extendidas con validación y trazabilidad
+#  Clases extendidas con validación y trazabilidad
 # ===========================================================================
 
 class OntologyDomain(OntologyDomain):
@@ -144,15 +144,29 @@ class OntologyRegistry(OntologyRegistry):
 MEDICAL = OntologyDomain(
     domain="medical",
     schema_name="medical_note_v1",
-    weight=1.0,
+    weight=0.95,
     aliases=[
-        "salud", "clínico", "médico", "paciente", "síntoma", "tratamiento",
-        "hospital", "doctor", "medicina", "fármaco", "diagnóstico",
-        "enfermedad", "health", "clinical", "medical", "patient", "disease",
-        "treatment", "therapy", "hospital", "drug", "vaccine"
+        # ⚕️ Más específicos, menos genéricos
+        "diagnóstico", "síntoma", "tratamiento", "terapia",
+        "hospital", "médico", "doctor", "paciente", "prescripción",
+        "cirugía", "fármaco", "medicina", "receta", "clínico",
+        "enfermedad", "historial médico", "análisis clínico",
+        # Inglés
+        "diagnosis", "symptom", "therapy", "treatment",
+        "hospital", "doctor", "patient", "prescription",
+        "surgery", "drug", "medication", "clinical trial", "medical record"
     ],
-    negative_aliases={"contrato", "invoice", "review"},
-    stopwords={"caso", "registro", "documento"},
+    negative_aliases={
+        # ⚠️ Palabras que anulan el contexto médico
+        "financial", "contract", "invoice", "policy", "software",
+        "product", "order", "payment", "investment", "bank", "insurance",
+        "agreement", "article", "press", "review", "customer", "user"
+    },
+    stopwords={
+        # 🧹 Palabras neutras que no ayudan al contexto
+        "caso", "registro", "documento", "data", "study", "report",
+        "analysis", "record", "case", "note"
+    },
     entity_types=[
         EntityTypeDef(
             name="Disease",
@@ -196,6 +210,7 @@ MEDICAL = OntologyDomain(
     ],
 )
 
+
 # ===========================================================================
 # ⚖️ LEGAL Domain
 # ===========================================================================
@@ -206,7 +221,7 @@ LEGAL = OntologyDomain(
     aliases=[
         "contrato", "cláusula", "firma", "notario", "juicio", "sentencia",
         "demanda", "acuerdo", "penalización", "contract", "agreement", "clause",
-        "signature", "trial", "lawsuit", "court", "penalty", "liability", "claim"
+        "signature", "trial", "lawsuit", "court", "penalty", "liability", "claim","jurisdicción","legal","law","compliance"
     ],
     negative_aliases={"hospital", "doctor", "disease"},
     stopwords={"documento", "registro", "caso"},
@@ -262,7 +277,7 @@ FINANCIAL = OntologyDomain(
         "divisa", "acción", "presupuesto", "bolsa", "cotización", "exchange",
         "finance", "investment", "stock", "currency", "insurance", "loan",
         "interest", "policy", "equity", "earnings", "revenue", "ingresos",
-        "financials", "trading", "comercio"
+        "financials", "trading", "comercio","earnings per share", "profit margin"
     ],
     negative_aliases={"hospital", "doctor", "contract", "disease"},
     stopwords={"monto", "total", "fecha"},
@@ -555,3 +570,5 @@ REGISTRY = OntologyRegistry(
         ECOMMERCE, VETERINARY, GEO, REVIEWS, GENERIC
     ]
 )
+
+

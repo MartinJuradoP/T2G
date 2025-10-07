@@ -51,15 +51,15 @@ stages:
       clean_outdir: true
 
       # --- Pesos de señales ---
-      alpha_kw: 0.35       # Keywords (léxica)
-      beta_emb: 0.35       # Embeddings (semántica densa)
-      gamma_ctx: 0.15      # Métricas contextuales (cohesión, health, novelty)
-      delta_top: 0.10      # Afinidad de tópicos globales/locales
+      alpha_kw: 0.20       # Keywords (léxica)
+      beta_emb: 0.40       # Embeddings (semántica densa)
+      gamma_ctx: 0.20      # Métricas contextuales (cohesión, health, novelty)
+      delta_top: 0.15      # Afinidad de tópicos globales/locales
       epsilon_prior: 0.05  # Priors (sesgos organizacionales)
 
       # --- Umbrales y control ---
-      ambig_threshold: 0.12        # Diferencia mínima para marcar ambigüedad
-      fallback_threshold: 0.40     # Confianza mínima antes de fallback genérico
+      ambig_threshold: 0.08        # Diferencia mínima para marcar ambigüedad
+      fallback_threshold: 0.38     # Confianza mínima antes de fallback genérico
       softmax_temp: 0.85           # Temperatura del softmax (confianza)
       disable_generic: false       # Si true, no aplica fallback 'generic'
 
