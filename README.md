@@ -14,7 +14,7 @@
 ## ✨ Objetivos
 
 * Unificar la ingesta de documentos en una **IR JSON común** independientemente del formato.
-* Enriquecer documentos con **contexto semántico a nivel documento y chunk** usando **embeddings + BERTopic**.
+* Enriquecer documentos con **contexto semántico a nivel documento y chunk** .
 * Mantener una arquitectura **resiliente, escalable y modular**: cada subsistema puede ejecutarse de forma independiente.
 * Preparar la base para **grafos de conocimiento**, **QA empresarial**, **compliance regulatorio** y **sistemas RAG**.
 
@@ -25,9 +25,9 @@
 | Nº | Subsistema | Rol principal | Entrada | Salida | Estado |
 |-:|--------------------------------|---------------------------------------------------------------------------|---------------------|--------------------------|--------|
 | 1 | **Parser** | Genera **IR JSON** homogénea con metadatos y layout | Doc (PDF/DOCX/IMG) | `DocumentIR` JSON | ✅ |
-| 2 | **BERTopic Contextizer (doc)** | Asigna **tópicos y keywords globales** a nivel documento | `DocumentIR` | `DocumentIR+Topics` JSON | ✅ |
+| 2 | **Hybrid Contextizer (doc)** | Asigna **tópicos y keywords globales** a nivel documento | `DocumentIR` | `DocumentIR+Topics` JSON | ✅ |
 | 3 | **HybridChunker** | Segmenta documento en **chunks semánticos estables (≤2048 tokens)** | `DocumentIR+Topics` | `DocumentChunks` JSON | ✅ |
-| 4 | **BERTopic Contextizer (chunk)** | Asigna tópicos locales a cada chunk (subtemas); enlaza con tópicos globales | `DocumentChunks` | `Chunks+Topics` JSON | ✅ |
+| 4 | **Hybrid Contextizer (chunk)** | Asigna tópicos locales a cada chunk (subtemas); enlaza con tópicos globales | `DocumentChunks` | `Chunks+Topics` JSON | ✅ |
 | 5 | **Adaptive Schema Selector** | Define dinámicamente entidades relevantes según contexto | `Chunks+Topics` | `SchemaSelection` JSON | 🔜 |
 | 6 | **Mentions (NER/RE)** | Detecta menciones condicionadas por tópicos | `Chunks+Topics` | `Mentions` JSON | 🔜 |
 | 7 | **Clustering de Menciones** | Agrupa spans en clusters semánticos | `Mentions` JSON | `Clusters` JSON | 🔜 |
@@ -297,23 +297,31 @@ Las métricas cuantitativas (`metrics_ext.py`) permiten auditar la calidad semá
 #### 9. **Salida (JSON)**
 
 ```json
-"topics_doc": {
-  "reason": "doc-hybrid",
-  "n_samples": 12,
-  "n_topics": 3,
-  "keywords_global": ["mercado","acciones","inversión"],
-  "topics": [
-    {"topic_id":0,"count":4,"exemplar":"El mercado bursátil sube tras reporte trimestral...","keywords":["acciones","finanzas","subida"]},
-    {"topic_id":1,"count":5,"exemplar":"Informe de inflación mensual afecta inversión...","keywords":["inflación","inversión","monetaria"]},
-    {"topic_id":2,"count":3,"exemplar":"Perspectivas globales para 2025...","keywords":["economía","riesgo","global"]}
-  ],
-  "metrics": {
-    "redundancy_score": 0.19,
-    "semantic_variance": 0.38,
-    "entropy_topics": 0.72,
-    "coherence_semantic": 0.88
+{
+  "meta": {
+    "topics_doc": {
+      "reason": "doc-hybrid",
+      "n_samples": 25,
+      "n_topics": 3,
+      "keywords_global": ["zacks", "research", "southern", "industry", "rank"],
+      "topics": [
+        {"topic_id": 0, "count": 3, "keywords": ["zacks", "research", "equity"]},
+        {"topic_id": 1, "count": 2, "keywords": ["+1.00%", "+0.36%"]},
+        {"topic_id": 2, "count": 2, "keywords": ["rank", "strong", "hold"]}
+      ],
+      "metrics_ext": {
+        "entropy_topics": 0.982,
+        "semantic_variance": 0.425,
+        "coherence_semantic": 0.303,
+        "keywords_diversity_ext": 0.958,
+        "topic_balance": 0.798,
+        "informativeness_ratio": 1.0,
+        "redundancy_score": 0.0
+      }
+    }
   }
 }
+
 ```
 
 ---
@@ -454,6 +462,14 @@ Para evaluar la calidad y la coherencia de los chunks, se calculan métricas cua
 * Toma los chunks creados por el `HybridChunker`.
 * Cada chunk incluye texto, contexto heredado (`topic_hints`, `keywords_global`) y métricas locales (`cohesion_vs_doc`, `chunk_health`).
 * Se asegura **consistencia semántica vertical**:
+Cada chunk llega al **Contextizer (chunk-level)** con su contexto semántico ya heredado desde el documento, a través de los campos `topic_hints`, `keywords_global` y métricas locales (`cohesion_vs_doc`, `chunk_health`).
+En la versión actual del pipeline, esta etapa opera **por defecto en modo LIGHT**, lo que significa que:
+
+* No ejecuta clustering adicional ni reducción de dimensión.
+* Reutiliza los `topic_hints` como **priors semánticos**.
+* Refina keywords locales mediante una fusión híbrida (TF-IDF, KeyBERT y embeddings).
+
+Esto garantiza una **consistencia semántica vertical automática** entre documento y chunks, manteniendo alineación de tópicos globales y subtemas locales sin duplicar cómputo ni perder coherencia.
 
   $T_{\text{chunk}} \subseteq T_{\text{doc}}$
 
@@ -534,22 +550,41 @@ Estas métricas permiten identificar fragmentos repetitivos o irrelevantes.
 #### 7. **Salida (JSON)**
 
 ```json
-"topics_chunks": {
-  "reason": "chunk-hybrid",
-  "n_samples": 10,
-  "n_topics": 2,
-  "keywords_global": ["diabetes","tratamiento","insulina"],
-  "topics": [
-    {"topic_id":0,"count":6,"exemplar":"Tratamiento prolongado con insulina...","keywords":["diabetes","tratamiento","efectos","insulina"]},
-    {"topic_id":1,"count":4,"exemplar":"Los síntomas clínicos incluyen...","keywords":["síntomas","fatiga","sed","clínico"]}
+{
+  "chunks": [
+    {
+      "chunk_id": "DOC-A5E2_0000_895D9A2D78",
+      "text": "Zacks Equity Research Mon, October 6, 2025 ...",
+      "topic": {
+        "topic_id": 0,
+        "keywords": ["zacks", "research", "southern", "industry"],
+        "prob": 1.0
+      },
+      "topic_hints": {
+        "inherited_keywords": ["zacks", "southern", "industry"],
+        "inherited_topic_ids": [0, 1, 2],
+        "topic_affinity": {"0": 0.25, "1": 0.18, "2": 0.26}
+      },
+      "scores": {
+        "cohesion_vs_doc": 1.0,
+        "chunk_health": 1.0,
+        "lexical_density": 1.0,
+        "type_token_ratio": 0.48
+      }
+    }
   ],
-  "metrics": {
-    "coverage": 0.94,
-    "fallback_rate": 0.06,
-    "topic_coherence_local": 0.85,
-    "keywords_overlap": 0.70
+  "meta": {
+    "topics_chunks": {
+      "reason": "chunk-hybrid",
+      "n_topics": 1,
+      "metrics_ext": {
+        "context_alignment": 0.0,
+        "redundancy_penalty": 0.0
+      }
+    }
   }
 }
+
 ```
 
 ---
@@ -982,15 +1017,23 @@ Evalúa la calidad y consistencia del parseo de documentos heterogéneos.
 
 ### Contextizer (doc-level)
 
-Mide la calidad del modelado temático global.
+**Métricas principales:**
 
-- `coverage`: proporción de bloques asignados a algún tópico.
-- `outlier_rate`: ratio de bloques descartados por ruido o baja densidad.
-- `topic_size_stats`: distribución del tamaño de clusters (`min`, `median`, `p95`).
-- `keywords_diversity`: diversidad de palabras clave únicas (riqueza semántica).
-- `topic_stability`: correlación promedio entre embeddings de tópicos en runs sucesivos (indicador de consistencia temporal).
-- `topic_entropy`: medida de dispersión temática (mayor = más heterogeneidad).
+* `coverage`: proporción de bloques asignados a algún tópico.
+* `outlier_rate`: ratio de bloques descartados por ruido o baja densidad.
+* `topic_size_stats`: distribución de tamaño de clusters (`min`, `median`, `p95`).
+* `keywords_diversity`: diversidad de palabras clave únicas (riqueza semántica).
+* `topic_stability`: correlación promedio entre embeddings de tópicos en ejecuciones sucesivas.
+* `topic_entropy`: medida de dispersión temática (mayor = más heterogeneidad).
 
+**Métricas extendidas (doc-level):**
+
+* `entropy_topics`: dispersión de masa entre tópicos (equilibrio global).
+* `redundancy_score`: repetición media entre keywords de un mismo tema (menor = mejor).
+* `keywords_diversity_ext`: diversidad ampliada considerando keywords post-MMR.
+* `semantic_variance`: varianza entre embeddings de *exemplars* (cohesión semántica global).
+* `coherence_semantic`: similitud promedio entre keywords dentro de cada tópico.
+* `context_quality`: índice compuesto de calidad del modelado temático.
 ---
 
 ### HybridChunker
@@ -1045,13 +1088,19 @@ Evalúa la **coherencia**, **redundancia** y **salud semántica** de los fragmen
 
 Evalúa la coherencia temática local y su relación con los tópicos globales.
 
-- `coverage`: % de chunks con tópico asignado.
-- `fallback_rate`: % de documentos donde se usó fallback en lugar de BERTopic.
-- `topic_size_stats`: distribución de tamaños de subtemas.
-- `keywords_overlap`: solapamiento promedio entre keywords globales y locales.
-- `topic_coherence_local`: coherencia intracluster promedio (similitud coseno media entre embeddings de un mismo tema).
-- `local_entropy`: dispersión de tópicos locales (mide estabilidad semántica).
+**Métricas principales:**
 
+* `coverage`: % de chunks con tópico asignado.
+* `fallback_rate`: % de documentos donde se usó fallback en lugar de clustering.
+* `topic_size_stats`: distribución de tamaños de subtemas.
+* `keywords_overlap`: solapamiento promedio entre keywords globales y locales.
+* `topic_coherence_local`: coherencia intracluster promedio (similitud coseno media).
+* `local_entropy`: dispersión de tópicos locales (mide estabilidad semántica).
+
+**Métricas extendidas (chunk-level):**
+
+* `redundancy_penalty`: penalización por similitud excesiva entre embeddings de chunks.
+* `context_alignment`: correlación promedio entre `topic_hints` heredados y los detectados localmente.
 ---
 
 ### Adaptive Schema Selector

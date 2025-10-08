@@ -117,7 +117,13 @@ def cmd_contextize_doc(args: argparse.Namespace) -> None:
         nr_topics=(None if args.nr_topics in (None, -1) else args.nr_topics),
         seed=args.seed,
         cache_dir=args.cache_dir,
+        use_hybrid=getattr(args, "use_hybrid", True),
+        use_keybert=getattr(args, "use_keybert", True),
+        enable_mmr=getattr(args, "enable_mmr", True),
+        hybrid_eps=getattr(args, "hybrid_eps", 0.25),
+        hybrid_min_samples=getattr(args, "hybrid_min_samples", 2),
     )
+
 
     for ir in args.ir_files:
         route_contextizer_doc(ir, cfg, outdir=outdir)
@@ -147,7 +153,10 @@ def cmd_chunk(args: argparse.Namespace) -> None:
 
 
 def cmd_contextize_chunks(args: argparse.Namespace) -> None:
-    """Contextualización a nivel chunk (usa BERTopic + fallbacks)."""
+    """Contextualización a nivel chunk (modo LIGHT por defecto).
+    Si los chunks contienen `topic_hints` heredados del HybridChunker,
+    aplica el modo ligero (sin clustering, solo keywords locales + MMR).
+    """
     cfg = TopicModelConfig(
         embedding_model=args.embedding_model,
         nr_topics=(None if args.nr_topics in (None, -1) else args.nr_topics),
@@ -315,6 +324,19 @@ def build_t2g_cli() -> argparse.ArgumentParser:
     c.add_argument("--cache-dir", default=None)
     c.add_argument("--outdir", default="outputs_doc_topics")
     c.add_argument("--clean-outdir", action="store_true")
+    # --- Modo híbrido y KeyBERT ---
+    c.add_argument("--use-hybrid", action="store_true", help="Activa el modo híbrido adaptativo (por defecto True)")
+    c.add_argument("--disable-hybrid", dest="use_hybrid", action="store_false", help="Desactiva el modo híbrido adaptativo")
+    c.set_defaults(use_hybrid=True)
+    c.add_argument("--use-keybert", action="store_true", help="Activa extracción semántica con KeyBERT (por defecto True)")
+    c.add_argument("--no-keybert", dest="use_keybert", action="store_false", help="Desactiva KeyBERT")
+    c.set_defaults(use_keybert=True)
+    c.add_argument("--enable-mmr", action="store_true", help="Activa filtrado MMR (reducción de redundancia)")
+    c.add_argument("--disable-mmr", dest="enable_mmr", action="store_false", help="Desactiva MMR")
+    c.set_defaults(enable_mmr=True)
+    # --- Clustering DBSCAN ---
+    c.add_argument("--hybrid-eps", type=float, default=0.25, help="Radio máximo (eps) para DBSCAN híbrido")
+    c.add_argument("--hybrid-min-samples", type=int, default=2, help="Mínimo de muestras por cluster DBSCAN")
     c.set_defaults(func=cmd_contextize_doc)
 
     # chunk

@@ -50,6 +50,16 @@ class TopicModelConfig(BaseModel):
 
     model_config = ConfigDict(extra="ignore", arbitrary_types_allowed=True)
 
+    # Hybrid mode
+    use_hybrid: bool = True
+    use_keybert: bool = True
+    fusion_weights: Optional[List[float]] = [0.5, 0.3, 0.2]  # tfidf, keybert, emb
+    hybrid_eps: float = 0.25
+    hybrid_min_samples: int = 2
+    cache_embeddings: bool = True
+    enable_mmr: bool = True
+    max_batch_size: int = 64
+
 
 # ---------------------------------------------------------------------
 # Contratos de salida — doc-level
@@ -74,6 +84,7 @@ class TopicsDocMeta(BaseModel):
     keywords_global: List[str] = Field(default_factory=list)
     topics: List[TopicItem] = Field(default_factory=list)
     outlier_ratio: Optional[float] = None
+    metrics_ext: Optional[Dict[str, float]] = None
 
     model_config = ConfigDict(extra="ignore")
 
@@ -98,5 +109,6 @@ class TopicsChunksMeta(BaseModel):
     n_topics: int
     keywords_global: List[str] = Field(default_factory=list)
     topics: List[TopicItem] = Field(default_factory=list)
+    metrics_ext: Optional[Dict[str, float]] = None
 
     model_config = ConfigDict(extra="ignore")

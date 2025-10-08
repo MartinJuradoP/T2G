@@ -53,11 +53,7 @@ logger.setLevel(logging.INFO)
 # ──────────────────────────────────────────────────────────────────────────────
 
 def run_hybrid_contextizer_doc(ir_path: str, cfg: TopicModelConfig, outdir: Path | str = "outputs_doc_topics") -> None:
-    """Ejecuta el modo híbrido de contextualización a nivel documento.
-
-    Este reemplazo se activa si `should_use_hybrid_doc()` devuelve True.
-    Opera sin UMAP ni BERTopic, usando DBSCAN + TF-IDF/KeyBERT + MMR.
-    """
+    """Ejecuta el modo híbrido de contextualización a nivel documento."""
     p = Path(ir_path)
     if not p.exists():
         logger.error("[Hybrid-DOC] Archivo no encontrado: %s", ir_path)
@@ -103,26 +99,54 @@ def run_hybrid_contextizer_doc(ir_path: str, cfg: TopicModelConfig, outdir: Path
         topics=topics,
         outlier_ratio=None
     )
-    data["meta"]["topics_doc"] = meta.model_dump(mode="json")
 
+    # ──────────────────────────────────────────────────────────────
+    # MÉTRICAS EXTENDIDAS — inyección directa al JSON (para Selector)
+    # ──────────────────────────────────────────────────────────────
+    from .metrics_ext import (
+        entropy_topics,
+        redundancy_score,
+        keywords_diversity_ext,
+        semantic_variance,
+        coherence_semantic,
+        topic_balance,
+        keyword_redundancy_rate,
+        informativeness_ratio,
+    )
+
+    metrics_ext = {}
+    try:
+        metrics_ext = {
+            "entropy_topics": entropy_topics(meta),
+            "redundancy_score": redundancy_score(meta),
+            "keywords_diversity_ext": keywords_diversity_ext(meta),
+            "semantic_variance": semantic_variance(meta, embedder),
+            "coherence_semantic": coherence_semantic(meta, embedder),
+            "topic_balance": topic_balance(meta),
+            "keyword_redundancy_rate": keyword_redundancy_rate(meta),
+            "informativeness_ratio": informativeness_ratio(meta),
+        }
+    except Exception as e:
+        logger.warning(f"[Hybrid-DOC] Error calculando métricas extendidas: {e}")
+
+    # Inyecta las métricas extendidas en el contrato JSON
+    meta_dict = meta.model_dump(mode="json")
+    meta_dict["metrics_ext"] = metrics_ext
+    data["meta"]["topics_doc"] = meta_dict
+
+    # Guardado
     outdir_p = Path(outdir)
     outdir_p.mkdir(parents=True, exist_ok=True)
     out_path = outdir_p / p.name.replace(".json", "_doc_topics.json")
     atomic_write_json(data, out_path)
     logger.info("[HYBRID-DOC OK] %s (topics=%d)", out_path, len(topics))
 
-
 # ──────────────────────────────────────────────────────────────────────────────
 # CHUNK-LEVEL HYBRID CONTEXTUALIZATION
 # ──────────────────────────────────────────────────────────────────────────────
 
 def run_hybrid_contextizer_chunks(chunk_path: str, cfg: TopicModelConfig) -> None:
-    """Ejecuta contextualización híbrida sobre chunks locales.
-
-    Combina DBSCAN + fusión de keywords + MMR para enriquecer cada chunk con
-    `topic_id`, `keywords`, y `prob≈1.0`. Mantiene compatibilidad completa con
-    `topics_chunks`.
-    """
+    """Ejecuta contextualización híbrida sobre chunks locales."""
     p = Path(chunk_path)
     if not p.exists():
         logger.error("[Hybrid-CHUNKS] No existe el archivo: %s", chunk_path)
@@ -145,7 +169,7 @@ def run_hybrid_contextizer_chunks(chunk_path: str, cfg: TopicModelConfig) -> Non
     labels, n_clusters = cluster_by_density(emb)
     topics = build_topic_items(texts, labels, embedder, top_k=cfg.max_keywords_per_topic)
 
-    # Asignación por chunk (simplificada: cluster más cercano)
+    # Asignación por chunk
     for i, c in enumerate(chunks):
         if not c.get("text"):
             continue
@@ -169,7 +193,22 @@ def run_hybrid_contextizer_chunks(chunk_path: str, cfg: TopicModelConfig) -> Non
         topics=topics,
     )
     data.setdefault("meta", {})
-    data["meta"]["topics_chunks"] = meta.model_dump(mode="json")
 
+    from .metrics_ext import context_alignment, redundancy_penalty
+
+    metrics_ext = {}
+    try:
+        metrics_ext = {
+            "context_alignment": context_alignment(chunks),
+            "redundancy_penalty": redundancy_penalty(emb),
+        }
+    except Exception as e:
+        logger.warning(f"[Hybrid-CHUNKS] Error calculando métricas extendidas: {e}")
+
+    meta_dict = meta.model_dump(mode="json")
+    meta_dict["metrics_ext"] = metrics_ext
+    data["meta"]["topics_chunks"] = meta_dict
+
+    # Guardado
     atomic_write_json(data, p)
     logger.info("[HYBRID-CHUNKS OK] %s (topics=%d)", chunk_path, len(topics))

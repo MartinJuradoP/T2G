@@ -3,8 +3,6 @@
 contextizer/contextizer.py — Router adaptativo entre BERTopic y modo híbrido
 ==========================================================================
 
-Versión final
--------------
 Este archivo amplía el Contextizer original para incluir el **modo híbrido**,
 que decide dinámicamente si utilizar BERTopic o el nuevo subsistema híbrido
 en función del contenido del documento o de los chunks.
@@ -15,12 +13,15 @@ Garantizar robustez en todos los contextos (documentos extensos, breves,
 ruidosos o multitema) sin alterar contratos ni romper el flujo original del
 pipeline T2G.
 
-Principales cambios
--------------------
+Características clave
 -  Detección adaptativa: usa `should_use_hybrid_doc` / `should_use_hybrid_chunks`.
 -  Modo híbrido automático: ejecuta `run_hybrid_contextizer_doc` / `run_hybrid_contextizer_chunks`.
 -  Compatibilidad completa: `TopicsDocMeta` y `TopicsChunksMeta` sin cambios.
 -  Logging informativo y trazabilidad en `meta.reason`.
+
+- Doc-level: Hybrid / BERTopic.
+- Chunk-level: Hybrid / BERTopic / Ligero (heredando topic_hints).
+
 
 Ejemplo de integración
 ----------------------

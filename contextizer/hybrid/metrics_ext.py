@@ -181,3 +181,91 @@ def coherence_semantic(dt: TopicsDocMeta, embedder=None) -> float:
         m = (np.sum(sim) - np.trace(sim)) / max(1, (sim.shape[0] * (sim.shape[1] - 1)))
         vals.append(float(m))
     return float(np.mean(vals)) if vals else 0.0
+
+# ──────────────────────────────────────────────────────────────────────────────
+# 6) Balance de tópicos (uniformidad de tamaños)
+# ──────────────────────────────────────────────────────────────────────────────
+
+def topic_balance(dt: TopicsDocMeta) -> float:
+    """Uniformidad del tamaño de tópicos (0..1, mayor= más equilibrado).
+
+    Calcula 1 - (std / mean) de los tamaños de cluster (count por tópico).
+    - 1.0 → todos los tópicos tienen tamaño similar.
+    - 0.0 → un tópico domina o los tamaños son muy desiguales.
+    """
+    sizes = np.array([int(t.count or 0) for t in _topic_items(dt)], dtype=float)
+    if len(sizes) <= 1 or sizes.mean() == 0:
+        return 0.0
+    return float(1 - (sizes.std() / (sizes.mean() + 1e-9)))
+
+
+# ──────────────────────────────────────────────────────────────────────────────
+# 7) Redundancia global de keywords (0..1, menor= mejor)
+# ──────────────────────────────────────────────────────────────────────────────
+
+def keyword_redundancy_rate(dt: TopicsDocMeta) -> float:
+    """Detecta solapamientos globales entre keywords de todos los tópicos.
+
+    0.0 → sin duplicados; 1.0 → todas las palabras se repiten.
+    """
+    kws = _all_keywords(_topic_items(dt))
+    if not kws:
+        return 0.0
+    unique = len(set(kws))
+    total = len(kws)
+    return float(1 - (unique / max(1, total)))
+
+
+# ──────────────────────────────────────────────────────────────────────────────
+# 8) Proporción de tópicos válidos (con keywords no vacías)
+# ──────────────────────────────────────────────────────────────────────────────
+
+def informativeness_ratio(dt: TopicsDocMeta) -> float:
+    """Fracción de tópicos con keywords válidas (0..1, mayor= mejor)."""
+    items = [t for t in _topic_items(dt) if t.keywords]
+    if not _topic_items(dt):
+        return 0.0
+    return float(len(items) / len(_topic_items(dt)))
+
+
+# ──────────────────────────────────────────────────────────────────────────────
+# 9) Alineación contextual chunk↔tópico heredado
+# ──────────────────────────────────────────────────────────────────────────────
+
+def context_alignment(chunks: List[dict]) -> float:
+    """Mide la afinidad semántica promedio entre chunks y sus topic_hints.
+
+    Requiere que cada chunk tenga los embeddings:
+      - `emb_chunk`
+      - `emb_hint` (promedio del tópico heredado)
+    Si faltan, retorna 0.0.
+    """
+    from sklearn.metrics.pairwise import cosine_similarity
+
+    sims = []
+    for ch in chunks:
+        emb_c = np.array(ch.get("emb_chunk"))
+        emb_h = np.array(ch.get("emb_hint"))
+        if emb_c.ndim == 1 and emb_h.ndim == 1:
+            sims.append(float(cosine_similarity([emb_c], [emb_h])[0][0]))
+    return float(np.mean(sims)) if sims else 0.0
+
+
+# ──────────────────────────────────────────────────────────────────────────────
+# 10) Penalización por redundancia entre chunks
+# ──────────────────────────────────────────────────────────────────────────────
+
+def redundancy_penalty(embeddings: np.ndarray, threshold: float = 0.85) -> float:
+    """Penaliza similitud alta entre embeddings de chunks (0..1, menor= mejor).
+
+    - Calcula la proporción de pares con similitud coseno > threshold.
+    - Ideal < 0.1. Si > 0.5 indica repetición o fragmentación excesiva.
+    """
+    if embeddings is None or len(embeddings) < 2:
+        return 0.0
+    from sklearn.metrics.pairwise import cosine_similarity
+
+    sim = cosine_similarity(embeddings)
+    iu = np.triu_indices_from(sim, k=1)
+    mask = (sim[iu] > threshold).astype(float)
+    return float(mask.mean() if mask.size else 0.0)

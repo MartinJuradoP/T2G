@@ -1,8 +1,18 @@
+# 📘 T2G Pipeline — Configuración Óptima
+# ======================================
+# Este pipeline ejecuta el flujo completo del proyecto T2G:
+# PDF/DOCX/IMG → IR homogéneo → Contexto Global (doc) → Chunks con Hints → 
+# Contexto Local (modo light) → Selección Adaptativa de Esquemas
+
 pipeline:
-  dry_run: false
-  continue_on_error: true
+  dry_run: false                # Ejecuta realmente las etapas
+  continue_on_error: true       # Continúa aunque falle una etapa puntual
 
 stages:
+
+  # ─────────────────────────────────────────────────────────────
+  # 1 PARSER — Conversión de documentos a IR homogéneo JSON
+  # ─────────────────────────────────────────────────────────────
   - name: parse
     args:
       clean_outdir: true
@@ -13,7 +23,12 @@ stages:
         - "docs/*.jpg"
         - "docs/*.csv"
       outdir: "outputs_ir"
+      # 💡 Convierte documentos heterogéneos a estructura DocumentIR
+      # Incluye detección de tablas, layout y metadatos básicos
 
+  # ─────────────────────────────────────────────────────────────
+  # 2 CONTEXTIZER (DOC-LEVEL) — Contexto global híbrido adaptativo
+  # ─────────────────────────────────────────────────────────────
   - name: contextize-doc
     args:
       clean_outdir: true
@@ -23,6 +38,20 @@ stages:
       seed: 42
       outdir: "outputs_doc_topics"
 
+      # ⚙️ Parámetros avanzados del Contextizer híbrido
+      use_hybrid: true           # Activa el modo híbrido adaptativo (TF-IDF + KeyBERT + embeddings)
+      use_keybert: true          # Extrae keywords semánticas con SentenceTransformers
+      enable_mmr: true           # Activa Maximal Marginal Relevance (reduce redundancia)
+      hybrid_eps: 0.25           # Radio de vecindad (DBSCAN adaptativo)
+      hybrid_min_samples: 2      # Muestras mínimas por cluster (DBSCAN)
+      cache_dir: "cache/"        # Carpeta opcional para embeddings cacheados
+
+      # 💡 Salida: DocumentIR enriquecido con meta.topics_doc
+      # Este contexto global será heredado por el Chunker.
+
+  # ─────────────────────────────────────────────────────────────
+  # 3 CHUNKER — Segmentación semántica adaptativa
+  # ─────────────────────────────────────────────────────────────
   - name: chunk
     args:
       clean_outdir: true
@@ -34,21 +63,39 @@ stages:
       embedding_model: "all-MiniLM-L6-v2"
       spacy_model: "es_core_news_sm"
       seed: 42
+      # 💡 Divide en chunks semánticos preservando cohesión y contexto global
+      # Hereda topic_hints desde meta.topics_doc
 
+  # ─────────────────────────────────────────────────────────────
+  # 4 CONTEXTIZER (CHUNK-LEVEL) — Modo LIGHT por defecto
+  # ─────────────────────────────────────────────────────────────
   - name: contextize-chunks
     args:
       chunks_glob: "outputs_chunks/*.json"
       embedding_model: "all-MiniLM-L6-v2"
       nr_topics: null
       seed: 42
-      outdir: "outputs_chunks"   # sobrescribe en sitio
+      outdir: "outputs_chunks"    # Sobrescribe enriqueciendo los mismos archivos
 
+      # ⚡ Modo LIGHT (automático)
+      # - No aplica clustering
+      # - Usa topic_hints heredados del Chunker
+      # - Refina keywords locales con KeyBERT + TF-IDF + MMR
+
+      use_keybert: true           # Mantiene extracción semántica local
+      enable_mmr: true            # Diversificación local (sin redundancia)
+      fusion_weights: [0.5, 0.3, 0.2]  # Peso relativo: TF-IDF / KeyBERT / embeddings
+
+      # 💡 Salida: DocumentChunks con meta.topics_chunks
+
+  # ─────────────────────────────────────────────────────────────
+  # 5 SCHEMA SELECTOR — Selección adaptativa de dominios/esquemas
+  # ─────────────────────────────────────────────────────────────
   - name: schema-select
     args:
       clean_outdir: true
       chunks_glob: "outputs_chunks/*.json"
       outdir: "outputs_schema"
-      clean_outdir: true
 
       # --- Pesos de señales ---
       alpha_kw: 0.20       # Keywords (léxica)
@@ -59,10 +106,13 @@ stages:
 
       # --- Umbrales y control ---
       ambig_threshold: 0.08        # Diferencia mínima para marcar ambigüedad
-      fallback_threshold: 0.38     # Confianza mínima antes de fallback genérico
-      softmax_temp: 0.85           # Temperatura del softmax (confianza)
-      disable_generic: false       # Si true, no aplica fallback 'generic'
+      fallback_threshold: 0.20     # Confianza mínima antes de fallback genérico
+      softmax_temp: 0.85           # Temperatura del softmax (controla confianza)
+      disable_generic: false       # Si true, desactiva fallback genérico
 
       # --- Selección de dominios ---
       topk_domains: 5              # Cuántos dominios devuelve a nivel doc
       max_domains: 5               # Máximo de dominios evaluados
+
+      # 💡 Salida: JSON con distribución de scores por dominio
+      # Este resultado alimentará futuras etapas (Mentions / Graph)
