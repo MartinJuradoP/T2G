@@ -75,18 +75,32 @@ def run_hybrid_contextizer_doc(ir_path: str, cfg: TopicModelConfig, outdir: Path
         logger.warning("[Hybrid-DOC] Documento vacío o sin texto utilizable.")
         return
 
-    # Embeddings globales
-    from sentence_transformers import SentenceTransformer
-    embedder = SentenceTransformer(cfg.embedding_model, device=cfg.device)
-    emb = embedder.encode(texts, show_progress_bar=False)
+    if cfg.use_hybrid:
+        # Embeddings y clustering activos
+        from sentence_transformers import SentenceTransformer
+        embedder = SentenceTransformer(cfg.embedding_model, device=cfg.device)
+        emb = embedder.encode(texts, show_progress_bar=False)
+        labels, n_clusters = cluster_by_density(emb)
+        topics = build_topic_items(texts, labels, embedder, top_k=cfg.max_keywords_per_topic)
+    else:
+        # Modo sin embeddings ni clustering
+        embedder = None
+        emb = None
+        labels, n_clusters = [0] * n, 1
+        topics = []
+        logger.info("[Hybrid-DOC] Modo ligero activo: sin embeddings ni clustering.")
 
-    # Clustering semántico
-    labels, n_clusters = cluster_by_density(emb)
-    topics = build_topic_items(texts, labels, embedder, top_k=cfg.max_keywords_per_topic)
 
     # Keywords globales (TF-IDF + KeyBERT)
-    merged_kw, keybert_kw, emb_kw = fuse_keywords(texts, embedder, top_k=cfg.fallback_max_keywords)
-    mmr_kw = mmr_filter(merged_kw, emb_kw, top_k=cfg.max_keywords_per_topic)
+    use_kb = (cfg.use_keybert and embedder is not None)
+    merged_kw, keybert_kw, emb_kw = fuse_keywords(
+        texts, embedder, top_k=cfg.fallback_max_keywords, use_keybert=use_kb
+    )
+    if cfg.enable_mmr:
+        mmr_kw = mmr_filter(merged_kw, emb_kw, top_k=cfg.max_keywords_per_topic)
+    else:
+        mmr_kw = merged_kw
+
 
     # Empaquetado final
     data.setdefault("meta", {})
@@ -133,6 +147,13 @@ def run_hybrid_contextizer_doc(ir_path: str, cfg: TopicModelConfig, outdir: Path
     meta_dict = meta.model_dump(mode="json")
     meta_dict["metrics_ext"] = metrics_ext
     data["meta"]["topics_doc"] = meta_dict
+    meta_dict["config_used"] = {
+    "use_hybrid": cfg.use_hybrid,
+    "use_keybert": cfg.use_keybert,
+    "enable_mmr": cfg.enable_mmr,
+    "hybrid_eps": cfg.hybrid_eps,
+    "hybrid_min_samples": cfg.hybrid_min_samples,
+    }
 
     # Guardado
     outdir_p = Path(outdir)
@@ -140,6 +161,12 @@ def run_hybrid_contextizer_doc(ir_path: str, cfg: TopicModelConfig, outdir: Path
     out_path = outdir_p / p.name.replace(".json", "_doc_topics.json")
     atomic_write_json(data, out_path)
     logger.info("[HYBRID-DOC OK] %s (topics=%d)", out_path, len(topics))
+    logger.info(
+    "[HYBRID CONFIG] use_hybrid=%s | use_keybert=%s | enable_mmr=%s",
+    cfg.use_hybrid,
+    cfg.use_keybert,
+    cfg.enable_mmr
+    )
 
 # ──────────────────────────────────────────────────────────────────────────────
 # CHUNK-LEVEL HYBRID CONTEXTUALIZATION
@@ -161,13 +188,22 @@ def run_hybrid_contextizer_chunks(chunk_path: str, cfg: TopicModelConfig) -> Non
         logger.warning("[Hybrid-CHUNKS] Sin texto válido.")
         return
 
-    # Embeddings + clustering
-    from sentence_transformers import SentenceTransformer
-    embedder = SentenceTransformer(cfg.embedding_model, device=cfg.device)
-    emb = embedder.encode(texts, show_progress_bar=False)
+    
+    if cfg.use_hybrid:
+        # Embeddings + clustering
+        from sentence_transformers import SentenceTransformer
+        embedder = SentenceTransformer(cfg.embedding_model, device=cfg.device)
+        emb = embedder.encode(texts, show_progress_bar=False)
+        labels, n_clusters = cluster_by_density(emb)
+        topics = build_topic_items(texts, labels, embedder, top_k=cfg.max_keywords_per_topic)
+    else:
+        # Sin embeddings ni clustering
+        embedder = None
+        emb = None
+        labels, n_clusters = [0] * n, 1
+        topics = []
+        logger.info("[Hybrid-CHUNKS] Modo ligero activo: sin embeddings ni clustering.")
 
-    labels, n_clusters = cluster_by_density(emb)
-    topics = build_topic_items(texts, labels, embedder, top_k=cfg.max_keywords_per_topic)
 
     # Asignación por chunk
     for i, c in enumerate(chunks):
@@ -181,8 +217,16 @@ def run_hybrid_contextizer_chunks(chunk_path: str, cfg: TopicModelConfig) -> Non
         }
 
     # Meta global (summary)
-    merged_kw, keybert_kw, emb_kw = fuse_keywords(texts, embedder, top_k=cfg.fallback_max_keywords)
-    mmr_kw = mmr_filter(merged_kw, emb_kw, top_k=cfg.max_keywords_per_topic)
+    use_kb = (cfg.use_keybert and embedder is not None)
+    merged_kw, keybert_kw, emb_kw = fuse_keywords(
+        texts, embedder, top_k=cfg.fallback_max_keywords, use_keybert=use_kb
+    )
+    
+    if cfg.enable_mmr:
+        mmr_kw = mmr_filter(merged_kw, emb_kw, top_k=cfg.max_keywords_per_topic)
+    else:
+        mmr_kw = merged_kw
+
 
     meta = TopicsChunksMeta(
         reason="chunk-hybrid",
@@ -208,7 +252,22 @@ def run_hybrid_contextizer_chunks(chunk_path: str, cfg: TopicModelConfig) -> Non
     meta_dict = meta.model_dump(mode="json")
     meta_dict["metrics_ext"] = metrics_ext
     data["meta"]["topics_chunks"] = meta_dict
+    meta_dict["config_used"] = {
+    "use_hybrid": cfg.use_hybrid,
+    "use_keybert": cfg.use_keybert,
+    "enable_mmr": cfg.enable_mmr,
+    "hybrid_eps": cfg.hybrid_eps,
+    "hybrid_min_samples": cfg.hybrid_min_samples,
+    }
+
 
     # Guardado
     atomic_write_json(data, p)
     logger.info("[HYBRID-CHUNKS OK] %s (topics=%d)", chunk_path, len(topics))
+    logger.info(
+    "[HYBRID CONFIG] use_hybrid=%s | use_keybert=%s | enable_mmr=%s",
+    cfg.use_hybrid,
+    cfg.use_keybert,
+    cfg.enable_mmr
+    )
+

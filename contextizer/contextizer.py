@@ -3,15 +3,17 @@
 contextizer/contextizer.py — Router adaptativo entre BERTopic y modo híbrido
 ==========================================================================
 
-Este archivo amplía el Contextizer original para incluir el **modo híbrido**,
-que decide dinámicamente si utilizar BERTopic o el nuevo subsistema híbrido
-en función del contenido del documento o de los chunks.
+Este archivo controla el enrutamiento entre los modos de contextualización:
 
-Objetivo
---------
-Garantizar robustez en todos los contextos (documentos extensos, breves,
-ruidosos o multitema) sin alterar contratos ni romper el flujo original del
-pipeline T2G.
+- **Modo completo (híbrido)**: usa embeddings, TF-IDF, KeyBERT y clustering por densidad (DBSCAN).
+- **Modo ligero (light)**: usa únicamente TF-IDF y, opcionalmente, KeyBERT (sin embeddings ni clustering).
+
+Objetivo:
+---------
+Garantizar robustez y flexibilidad para documentos extensos o breves, 
+según la configuración definida en `TopicModelConfig`.
+
+
 
 Características clave
 -  Detección adaptativa: usa `should_use_hybrid_doc` / `should_use_hybrid_chunks`.
@@ -19,8 +21,6 @@ Características clave
 -  Compatibilidad completa: `TopicsDocMeta` y `TopicsChunksMeta` sin cambios.
 -  Logging informativo y trazabilidad en `meta.reason`.
 
-- Doc-level: Hybrid / BERTopic.
-- Chunk-level: Hybrid / BERTopic / Ligero (heredando topic_hints).
 
 
 Ejemplo de integración
@@ -49,9 +49,34 @@ from .schemas import TopicModelConfig
 # Importamos heurísticas y modos híbridos
 from .hybrid.analyzers import should_use_hybrid_doc, should_use_hybrid_chunks
 from .hybrid.hybrid_contextizer import run_hybrid_contextizer_doc, run_hybrid_contextizer_chunks
+import json
 
 logger = logging.getLogger("contextizer.router")
 logger.setLevel(logging.INFO)
+# ──────────────────────────────────────────────────────────────────────────────
+# Light Contextizer (sin embeddings ni clustering)
+# ──────────────────────────────────────────────────────────────────────────────
+def run_light_contextizer_doc(ir_path: str, cfg: TopicModelConfig, outdir: Path | str) -> None:
+    """Modo ligero: solo TF-IDF y KeyBERT, sin embeddings ni clustering."""
+    from .hybrid.hybrid_contextizer import run_hybrid_contextizer_doc
+    cfg_copy = cfg.model_copy(deep=True)
+    cfg_copy.use_hybrid = False
+    cfg_copy.cache_embeddings = False
+    cfg_copy.hybrid_min_samples = 0
+    cfg_copy.hybrid_eps = 0.0
+    run_hybrid_contextizer_doc(ir_path, cfg_copy, outdir)
+# ──────────────────────────────────────────────────────────────────────────────
+# Light Contextizer (sin embeddings ni clustering)
+# ──────────────────────────────────────────────────────────────────────────────
+def run_light_contextizer_chunks(chunk_path: str, cfg: TopicModelConfig) -> None:
+    """Modo ligero: sin embeddings ni clustering, solo TF-IDF/KeyBERT."""
+    from .hybrid.hybrid_contextizer import run_hybrid_contextizer_chunks
+    cfg_copy = cfg.model_copy(deep=True)
+    cfg_copy.use_hybrid = False
+    cfg_copy.cache_embeddings = False
+    cfg_copy.hybrid_min_samples = 0
+    cfg_copy.hybrid_eps = 0.0
+    run_hybrid_contextizer_chunks(chunk_path, cfg_copy)
 
 # ──────────────────────────────────────────────────────────────────────────────
 # DOC-LEVEL ROUTER
@@ -65,9 +90,13 @@ def route_contextizer_doc(ir_path: str, cfg: TopicModelConfig, outdir: Path | st
     2️ Evalúa heurísticas → decide modo.
     3️ Ejecuta el motor correspondiente y persiste salida.
     """
-    import json
-    from sentence_transformers import SentenceTransformer
-
+    # ─────────────────────────────────────────────
+    # Validación lógica rápida de configuración
+    # ─────────────────────────────────────────────
+    if cfg.enable_mmr and not cfg.use_keybert:
+        logger.warning("[Router-DOC] Ignorando enable_mmr=True porque use_keybert=False.")
+        cfg.enable_mmr = False
+    
     p = Path(ir_path)
     if not p.exists():
         logger.error("[Router-DOC] Archivo no encontrado: %s", ir_path)
@@ -81,21 +110,19 @@ def route_contextizer_doc(ir_path: str, cfg: TopicModelConfig, outdir: Path | st
         if isinstance(blk, dict) and isinstance(blk.get("text"), str)
     ]
     texts = [t for t in texts if t]
-
     if not texts:
         logger.warning("[Router-DOC] Documento vacío, se omite.")
         return
 
-    embedder = SentenceTransformer(cfg.embedding_model, device=cfg.device)
-    emb = embedder.encode(texts, show_progress_bar=False)
+    if not cfg.use_hybrid:
+        logger.info("[Router-DOC] Ejecutando modo LIGHT (sin embeddings ni clustering).")
+        run_light_contextizer_doc(ir_path, cfg, outdir)
+        return
 
-    # Decisión adaptativa
-    if should_use_hybrid_doc(texts, cfg, emb):
-        logger.info("[Router-DOC] Activando modo híbrido (heurísticas positivas).")
-        run_hybrid_contextizer_doc(ir_path, cfg, outdir)
-    else:
-        logger.info("[Router-DOC] Modo estándar BERTopic.")
-        run_contextizer_on_doc(ir_path, cfg, outdir)
+    logger.info("[Router-DOC] Ejecutando modo COMPLETO (embeddings + TF-IDF + KeyBERT + clustering).")
+    run_hybrid_contextizer_doc(ir_path, cfg, outdir)
+
+
 
 # ──────────────────────────────────────────────────────────────────────────────
 # CHUNK-LEVEL ROUTER
@@ -103,8 +130,12 @@ def route_contextizer_doc(ir_path: str, cfg: TopicModelConfig, outdir: Path | st
 
 def route_contextizer_chunks(chunk_path: str, cfg: TopicModelConfig) -> None:
     """Router adaptativo chunk-level: decide entre BERTopic o modo híbrido."""
-    import json
-    from sentence_transformers import SentenceTransformer
+    # ─────────────────────────────────────────────
+    # Validación lógica rápida de configuración
+    # ─────────────────────────────────────────────
+    if cfg.enable_mmr and not cfg.use_keybert:
+        logger.warning("[Router-CHUNKS] Ignorando enable_mmr=True porque use_keybert=False.")
+        cfg.enable_mmr = False
 
     p = Path(chunk_path)
     if not p.exists():
@@ -114,21 +145,19 @@ def route_contextizer_chunks(chunk_path: str, cfg: TopicModelConfig) -> None:
     data = json.loads(p.read_text(encoding="utf-8"))
     chunks = data.get("chunks", []) or []
     texts = [str(c.get("text", "")).strip() for c in chunks if c.get("text")]
-
     if not texts:
         logger.warning("[Router-CHUNKS] Sin texto utilizable.")
         return
 
-    embedder = SentenceTransformer(cfg.embedding_model, device=cfg.device)
-    emb = embedder.encode(texts, show_progress_bar=False)
+    if not cfg.use_hybrid:
+        logger.info("[Router-CHUNKS] Ejecutando modo LIGHT (sin embeddings ni clustering).")
+        run_light_contextizer_chunks(chunk_path, cfg)
+        return
 
-    # Decisión adaptativa
-    if should_use_hybrid_chunks(texts, cfg, emb):
-        logger.info("[Router-CHUNKS] Activando modo híbrido.")
-        run_hybrid_contextizer_chunks(chunk_path, cfg)
-    else:
-        logger.info("[Router-CHUNKS] Modo estándar BERTopic.")
-        run_contextizer_on_chunks(chunk_path, cfg)
+    logger.info("[Router-CHUNKS] Ejecutando modo COMPLETO (embeddings + TF-IDF + KeyBERT + clustering).")
+    run_hybrid_contextizer_chunks(chunk_path, cfg)
+
+
 
 # ──────────────────────────────────────────────────────────────────────────────
 # INTERFAZ PÚBLICA

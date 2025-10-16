@@ -243,8 +243,16 @@ def cmd_pipeline_yaml(args: argparse.Namespace) -> None:
                 cache_dir=sargs.get("cache_dir", None),
                 outdir=sargs.get("outdir", "outputs_doc_topics"),
                 clean_outdir=sargs.get("clean_outdir", False),
+
+                # 🚀 Flags que tenías en YAML pero no se estaban pasando
+                use_hybrid=sargs.get("use_hybrid", True),
+                use_keybert=sargs.get("use_keybert", True),
+                enable_mmr=sargs.get("enable_mmr", True),
+                hybrid_eps=sargs.get("hybrid_eps", 0.25),
+                hybrid_min_samples=sargs.get("hybrid_min_samples", 2),
             )
             cmd_contextize_doc(ns)
+
 
         elif name == "chunk":
             ir_files = _expand_inputs(sargs, "ir_glob", "ir_files")
@@ -266,12 +274,21 @@ def cmd_pipeline_yaml(args: argparse.Namespace) -> None:
             ns = argparse.Namespace(
                 chunk_files=chunk_files,
                 embedding_model=sargs.get("embedding_model", "all-MiniLM-L6-v2"),
-                nr_topics=sargs.get("nr_topics", None),       
+                nr_topics=sargs.get("nr_topics", None),
                 seed=sargs.get("seed", 42),
-                cache_dir=sargs.get("cache_dir", None),       
-                outdir=sargs.get("outdir", "outputs_chunks")
+                cache_dir=sargs.get("cache_dir", None),
+                outdir=sargs.get("outdir", "outputs_chunks"),
+
+                # 🚀 Flags locales para keywords/MMR en chunk-level (venían en tu YAML)
+                use_keybert=sargs.get("use_keybert", True),
+                enable_mmr=sargs.get("enable_mmr", True),
+                fusion_weights=sargs.get("fusion_weights", [0.5, 0.3, 0.2]),
+
+                # (Opcional) soportar también use_hybrid en chunks si lo quieres conmutar
+                use_hybrid=sargs.get("use_hybrid", True),
             )
             cmd_contextize_chunks(ns)
+
         
         elif name == "schema-select":
             chunk_files = _expand_inputs(sargs, "chunks_glob", "chunk_files")
@@ -353,13 +370,30 @@ def build_t2g_cli() -> argparse.ArgumentParser:
     ch.set_defaults(func=cmd_chunk)
 
     # contextize-chunks (stub)
+    # contextize-chunks
     cc = cmds.add_parser("contextize-chunks", help="Añade contexto local a chunks")
     cc.add_argument("chunk_files", nargs="+")
     cc.add_argument("--embedding-model", default="all-MiniLM-L6-v2")
     cc.add_argument("--nr-topics", type=int, default=None, dest="nr_topics")
     cc.add_argument("--seed", type=int, default=42)
     cc.add_argument("--cache-dir", default=None)
+
+    # 🔻 nuevas flags
+    cc.add_argument("--use-hybrid", action="store_true")
+    cc.add_argument("--disable-hybrid", dest="use_hybrid", action="store_false")
+    cc.set_defaults(use_hybrid=True)
+
+    cc.add_argument("--use-keybert", action="store_true")
+    cc.add_argument("--no-keybert", dest="use_keybert", action="store_false")
+    cc.set_defaults(use_keybert=True)
+
+    cc.add_argument("--enable-mmr", action="store_true")
+    cc.add_argument("--disable-mmr", dest="enable_mmr", action="store_false")
+    cc.set_defaults(enable_mmr=True)
+
+    cc.add_argument("--fusion-weights", type=float, nargs=3, default=[0.5, 0.3, 0.2])
     cc.set_defaults(func=cmd_contextize_chunks)
+
 
     # schema-select
     ss = cmds.add_parser("schema-select", help="Ejecuta Adaptive Schema Selector 2.0")

@@ -56,9 +56,8 @@ project_T2G/
 ├── contextizer/                     # Subsistema Contextizer híbrido
 │   ├── contextizer.py               # Orquestador principal (doc- y chunk-level)
 │   ├── metrics.py                   # Métricas básicas de cobertura, redundancia, etc.
-│   ├── metrics_ext.py               # Métricas extendidas (coherence_semantic, entropy, etc.)
-│   ├── analyzers.py                 # Router adaptativo (avg_len, TTR, semantic_var)
-│   ├── models.py                    # Clases internas (TopicItem, ContextizerResult)
+│   ├── metrics_ext.py               # Métricas extendidas (coherence_semantic, entropy,etc.)
+    ├── models.py                    # Clases internas (TopicItem, ContextizerResult)
 │   ├── schemas.py                   # Contratos Pydantic (DocumentTopics, ChunkTopics)
 │   ├── utils.py                     # Normalización, stopwords, embeddings, caching
 │   ├── hybrid/                      # Núcleo del modo híbrido

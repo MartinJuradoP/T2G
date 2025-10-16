@@ -5,8 +5,7 @@ contextizer.hybrid.analyzers — Heurísticas adaptativas del Contextizer Híbri
 
 Resumen
 -------
-Este módulo implementa las **reglas heurísticas** que determinan cuándo activar
-el modo híbrido en lugar del modelo BERTopic clásico. El propósito es reducir
+El propósito es reducir
 fallos en documentos o fragmentos (chunks) cortos, ruidosos o con alta
 diversidad temática, sin incurrir en costos innecesarios de procesamiento.
 

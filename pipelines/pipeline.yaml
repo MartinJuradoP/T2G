@@ -41,7 +41,7 @@ stages:
       # ⚙️ Parámetros avanzados del Contextizer híbrido
       use_hybrid: false           # Activa el modo híbrido adaptativo (TF-IDF + KeyBERT + embeddings)
       use_keybert: true          # Extrae keywords semánticas con SentenceTransformers
-      enable_mmr: false           # Activa Maximal Marginal Relevance (reduce redundancia)
+      enable_mmr: true           # Activa Maximal Marginal Relevance (reduce redundancia)
       hybrid_eps: 0.25           # Radio de vecindad (DBSCAN adaptativo)
       hybrid_min_samples: 2      # Muestras mínimas por cluster (DBSCAN)
       cache_dir: "cache/"        # Carpeta opcional para embeddings cacheados
