@@ -9,6 +9,7 @@ Incluye:
 - Cómputo de señales: keyword F1, topic_affinity, context_score (cohesión, salud, etc.).
 - Fusión de señales y confianza softmax con temperatura.
 - Generación de explicaciones con contribuciones dominantes.
+- Integración con métricas semánticas extendidas (metrics_ext) del Contextizer.
 """
 
 from __future__ import annotations
@@ -17,8 +18,11 @@ import numpy as np
 import re
 from math import exp
 import unicodedata
-
 import spacy
+
+# ---------------------------------------------------------------------------
+# 🔹 Inicialización spaCy (opcional)
+# ---------------------------------------------------------------------------
 
 try:
     nlp_en = spacy.load("en_core_web_sm")
@@ -29,6 +33,7 @@ try:
     nlp_es = spacy.load("es_core_news_sm")
 except Exception:
     nlp_es = None
+
 
 # ---------------------------------------------------------------------------
 # 🔹 Texto y tokens
@@ -44,23 +49,21 @@ def normalize_text(text: str, lang: str | None = None) -> str:
     if not text:
         return ""
 
-    # Lowercase + quitar acentos
-    import unicodedata, re
     text = text.lower()
     text = unicodedata.normalize("NFKD", text).encode("ascii", "ignore").decode("utf-8", "ignore")
     text = re.sub(r"[^a-z\s]", " ", text)
     text = re.sub(r"\s+", " ", text).strip()
 
-    # Detecta idioma simple por presencia de letras comunes
     global nlp_en, nlp_es
     lang = lang or ("es" if any(ch in text for ch in "áéíóúñ") else "en")
-
     nlp = nlp_es if lang == "es" and nlp_es else nlp_en
+
     if nlp:
         doc = nlp(text)
         text = " ".join([tok.lemma_ for tok in doc if not tok.is_stop and len(tok) > 2])
 
     return text
+
 
 def normalize_keyword(text: str) -> str:
     return text.lower().strip() if text else ""
@@ -100,12 +103,10 @@ def normalize_vector(v: List[float]) -> List[float]:
 
 def get_doc_centroid(doc: Dict[str, Any]) -> List[float]:
     embeddings: List[List[float]] = []
-    # Preferimos embeddings de chunks (meta_local.embedding)
     for ch in doc.get("chunks", []):
         emb = ch.get("meta_local", {}).get("embedding")
         if emb:
             embeddings.append(emb)
-    # Fallback: embeddings agregados en topics_doc (si existieran)
     tdoc = doc.get("meta", {}).get("topics_doc", {})
     embeddings.extend(tdoc.get("embeddings", []))
     if not embeddings:
@@ -117,12 +118,7 @@ def get_chunk_centroid(ch: Dict[str, Any]) -> List[float]:
     emb = ch.get("meta_local", {}).get("embedding")
     if emb:
         return normalize_vector(emb)
-    # Fallback: promedio de embeddings de oraciones (si existen)
-    s_embs = []
-    for s in ch.get("sentences", []):
-        e = s.get("meta", {}).get("embedding")
-        if e:
-            s_embs.append(e)
+    s_embs = [s.get("meta", {}).get("embedding") for s in ch.get("sentences", []) if s.get("meta", {}).get("embedding")]
     if not s_embs:
         return []
     return normalize_vector(np.mean(np.array(s_embs, dtype=float), axis=0).tolist())
@@ -138,7 +134,6 @@ def get_doc_keywords(doc: Dict[str, Any]) -> List[str]:
     tdoc = meta.get("topics_doc", {})
     if "keywords_global" in tdoc:
         kws.extend(tdoc.get("keywords_global", []))
-    # También agregamos keywords globales de topics_chunks (si existen)
     tch = meta.get("topics_chunks", {})
     if "keywords_global" in tch:
         kws.extend(tch.get("keywords_global", []))
@@ -149,7 +144,6 @@ def get_chunk_keywords(ch: Dict[str, Any]) -> List[str]:
     kws: List[str] = []
     if "topic" in ch and isinstance(ch["topic"], dict):
         kws.extend(ch["topic"].get("keywords", []))
-    # Si hay meta.topics_chunk
     mt = ch.get("meta", {}).get("topics_chunk", {})
     if "keywords" in mt:
         kws.extend(mt.get("keywords", []))
@@ -173,12 +167,11 @@ def keyword_f1(doc_kws: List[str], domain_aliases: List[str]) -> Tuple[float, Di
       P = matches / len(doc_kws)
       R = matches / len(domain_aliases)
       F1 = 2PR/(P+R)
-    Aplica normalización robusta para evitar falsos negativos (GPU/gpu, PyTorch/pytorch, etc.)
+    Aplica normalización robusta para evitar falsos negativos.
     """
     if not doc_kws or not domain_aliases:
         return 0.0, {"matches": 0, "precision": 0.0, "recall": 0.0}
 
-    # Normalizamos ambas listas
     doc_norm = [normalize_text(k) for k in doc_kws]
     dom_norm = [normalize_text(a) for a in domain_aliases]
 
@@ -199,7 +192,6 @@ def keyword_f1(doc_kws: List[str], domain_aliases: List[str]) -> Tuple[float, Di
     }
 
 
-
 def topic_affinity_score(doc: Dict[str, Any], domain_aliases: List[str]) -> Tuple[float, Dict[str, Any]]:
     """
     Mide la afinidad tema-dominio combinando:
@@ -212,9 +204,8 @@ def topic_affinity_score(doc: Dict[str, Any], domain_aliases: List[str]) -> Tupl
     score_doc = 0.0
     used = 0
 
-    # Doc-level topics
     tdoc = meta.get("topics_doc", {})
-    topics = tdoc.get("topics", [])  # [{'topic_id':..., 'keywords':[...], 'prob':...}]
+    topics = tdoc.get("topics", [])
     for t in topics or []:
         kws = set(unique_norm(t.get("keywords", [])))
         if not kws:
@@ -225,7 +216,6 @@ def topic_affinity_score(doc: Dict[str, Any], domain_aliases: List[str]) -> Tupl
         score_doc += j * float(t.get("prob", 0.0))
         used += 1
 
-    # Chunk-level topics (ponderado por salud)
     score_chunks = 0.0
     used_chunks = 0
     for ch in doc.get("chunks", []):
@@ -237,9 +227,8 @@ def topic_affinity_score(doc: Dict[str, Any], domain_aliases: List[str]) -> Tupl
         score_chunks += j * health
         used_chunks += 1
 
-    # Normalizamos por contajes usados
-    score = 0.0
     parts = 0
+    score = 0.0
     if used > 0:
         score += score_doc / used
         parts += 1
@@ -263,7 +252,7 @@ def context_score(metrics: Dict[str, float]) -> Tuple[float, Dict[str, Any]]:
       C = 0.30*cohesion_vs_doc + 0.30*chunk_health
         + 0.20*(1 - redundancy_norm) + 0.10*novelty
         + 0.10*richness
-    donde richness = 0.5*lexical_density + 0.5*type_token_ratio
+    Extiende con métricas semánticas opcionales si están disponibles.
     """
     cvd = float(metrics.get("cohesion_vs_doc", 0.0))
     hlt = float(metrics.get("chunk_health", 0.0))
@@ -272,15 +261,30 @@ def context_score(metrics: Dict[str, float]) -> Tuple[float, Dict[str, Any]]:
     lex = float(metrics.get("lexical_density", 0.0))
     ttr = float(metrics.get("type_token_ratio", 0.0))
     richness = 0.5 * lex + 0.5 * ttr
-    c = (0.30 * cvd) + (0.30 * hlt) + (0.20 * (1.0 - red)) + (0.10 * nov) + (0.10 * richness)
-    return max(0.0, min(1.0, float(c))), {
+
+    base = (0.30 * cvd) + (0.30 * hlt) + (0.20 * (1.0 - red)) + (0.10 * nov) + (0.10 * richness)
+
+    # 🔹 nuevas métricas extendidas (si existen)
+    coh_ext = float(metrics.get("ext_coherence_semantic", 0.0))
+    ent_ext = float(metrics.get("ext_entropy_topics", 0.0))
+    var_ext = float(metrics.get("ext_semantic_variance", 0.0))
+    info_ext = float(metrics.get("ext_informativeness_ratio", 0.0))
+
+    base += 0.05 * (coh_ext + var_ext + info_ext - ent_ext)
+
+    return max(0.0, min(1.0, float(base))), {
         "cohesion_vs_doc": cvd, "chunk_health": hlt, "redundancy_norm": red,
-        "novelty": nov, "lexical_density": lex, "type_token_ratio": ttr, "richness": richness
+        "novelty": nov, "lexical_density": lex, "type_token_ratio": ttr, "richness": richness,
+        "ext_coherence_semantic": coh_ext, "ext_entropy_topics": ent_ext,
+        "ext_semantic_variance": var_ext, "ext_informativeness_ratio": info_ext
     }
 
 
 def aggregate_doc_metrics(doc: Dict[str, Any]) -> Dict[str, float]:
-    """Promedia métricas 'scores' de los chunks para obtener contexto global del documento."""
+    """
+    Promedia métricas 'scores' de los chunks para obtener contexto global del documento.
+    Si existen métricas extendidas en meta.topics_doc.metrics_ext, se incluyen.
+    """
     keys = ["cohesion_vs_doc", "chunk_health", "redundancy_norm", "novelty", "lexical_density", "type_token_ratio"]
     acc: Dict[str, List[float]] = {k: [] for k in keys}
     for ch in doc.get("chunks", []):
@@ -289,9 +293,14 @@ def aggregate_doc_metrics(doc: Dict[str, Any]) -> Dict[str, float]:
             v = sc.get(k)
             if isinstance(v, (int, float)):
                 acc[k].append(float(v))
-    out: Dict[str, float] = {}
-    for k, vals in acc.items():
-        out[k] = float(np.mean(vals)) if vals else 0.0
+    out: Dict[str, float] = {k: float(np.mean(v)) if v else 0.0 for k, v in acc.items()}
+
+    # 🔹 integración adaptativa
+    metrics_ext = doc.get("meta", {}).get("topics_doc", {}).get("metrics_ext", {})
+    if metrics_ext:
+        for k, v in metrics_ext.items():
+            if isinstance(v, (int, float)):
+                out[f"ext_{k}"] = float(v)
     return out
 
 
@@ -334,7 +343,7 @@ def build_explanation(domain: str,
         pieces.append(label[d])
     if not pieces:
         return f"Dominio '{domain}' seleccionado con señales débiles; se recomienda fallback genérico."
-    # Añadimos un par de detalles numéricos útiles si existen
+
     dets = []
     if "kw" in ev_summary and "precision" in ev_summary["kw"]:
         dets.append(f"precisión_kw={ev_summary['kw']['precision']:.2f}")
@@ -342,8 +351,6 @@ def build_explanation(domain: str,
         dets.append(f"recall_kw={ev_summary['kw']['recall']:.2f}")
     if "emb" in ev_summary and "best_label" in ev_summary["emb"]:
         dets.append(f"label_emb={ev_summary['emb']['best_label']}")
-    if "context" in context_details:
-        pass  # context_details ya viene desplegado
 
     base = f"Dominio '{domain}' seleccionado por " + ", ".join(pieces) + "."
     if dets:

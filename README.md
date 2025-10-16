@@ -1,6 +1,6 @@
 # 📚 Proyecto T2G — Knowledge Graph a partir de Documentos
 
-**T2G** es una *pipeline modular y extensible* que convierte documentos heterogéneos (PDF, DOCX, imágenes) en una **Representación Intermedia (IR) homogénea**, los enriquece con **contexto semántico global y local**, y prepara la base para construir **grafos de conocimiento** y sistemas de **búsqueda avanzada (RAG, QA, compliance, etc.)**.
+**T2G** es una *pipeline modular y extensible* que convierte documentos heterogéneos (PDF, DOCX, imágenes) en una **Representación Intermedia (IR) homogénea**, los enriquece con **contexto semántico global y local**, esto con el fin de poder crear schemas y su selección apoyado del contexto para facilitar y prepara la base para construir **grafos de conocimiento** .
 
 * **Entrada:** PDF / DOCX / PNG / JPG
 * **Salidas:**
@@ -1165,7 +1165,7 @@ sudo apt install tesseract-ocr-spa      # Ubuntu/Debian
 ### NLP / embeddings
 
 ```bash
-pip install spacy sentence-transformers bertopic
+pip install spacy sentence-transformers
 python -m spacy download es_core_news_sm
 python -m spacy download en_core_web_sm
 ```
@@ -1199,13 +1199,3 @@ python t2g_cli.py pipeline-yaml
 * **OCR falla:** instala Tesseract y revisa `PATH`.
 * **spaCy no carga:** descarga modelos `es_core_news_sm`, `en_core_web_sm`.
 * **Errores de import:** ejecuta siempre desde raíz del proyecto.
-
----
-
-## 🧪 Roadmap inmediato
-
-* Añadir **HybridChunker** con herencia de `topics_doc`.
-* Implementar **chunk-level contextizer**.
-* Integrar **Adaptive Schema Selector**.
-* Completar **Mentions + Clustering + Normalización**.
-* Exportar entidades y relaciones a **Neo4j / RDF**.

@@ -223,7 +223,7 @@ LEGAL = OntologyDomain(
         "demanda", "acuerdo", "penalización", "contract", "agreement", "clause",
         "signature", "trial", "lawsuit", "court", "penalty", "liability", "claim","jurisdicción","legal","law","compliance"
     ],
-    negative_aliases={"hospital", "doctor", "disease"},
+    negative_aliases={"hospital", "doctor", "disease","stocks","finance","invoice"},
     stopwords={"documento", "registro", "caso"},
     entity_types=[
         EntityTypeDef(
@@ -276,8 +276,8 @@ FINANCIAL = OntologyDomain(
         "finanzas", "factura", "transacción", "pago", "banco", "seguro", "mercado",
         "divisa", "acción", "presupuesto", "bolsa", "cotización", "exchange",
         "finance", "investment", "stock", "currency", "insurance", "loan",
-        "interest", "policy", "equity", "earnings", "revenue", "ingresos",
-        "financials", "trading", "comercio","earnings per share", "profit margin"
+        "interest", "policy", "equity", "earnings", "revenue", "ingresos","P&L","Margin","ROI",
+        "financials", "trading", "comercio","earnings per share", "profit margin", "EPS", "Dividend","foreign exchange","FX","mutual fund","hedge fund"
     ],
     negative_aliases={"hospital", "doctor", "contract", "disease"},
     stopwords={"monto", "total", "fecha"},
@@ -328,7 +328,7 @@ TECH = OntologyDomain(
     aliases=[
         "benchmark", "reseña", "modelo", "gpu", "cpu", "latencia", "precisión",
         "tecnología", "hardware", "software", "review", "performance", "specs",
-        "accuracy", "ai", "model", "technology", "data", "inference", "training"
+        "accuracy", "ai", "model", "technology", "data", "inference", "training","news"
     ],
     negative_aliases={"contract", "disease", "invoice"},
     stopwords={"comparativa", "prueba", "resultado"},

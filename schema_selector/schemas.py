@@ -151,6 +151,7 @@ class DocSchemaSelection(BaseModel):
     signals_used: List[str] = Field(default_factory=list)
     weights_used: Dict[str, float] = Field(default_factory=dict)
     ambiguous: bool = False
+    
 
 
 class SchemaSelection(BaseModel):
