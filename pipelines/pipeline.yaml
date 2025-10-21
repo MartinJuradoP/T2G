@@ -39,7 +39,7 @@ stages:
       outdir: "outputs_doc_topics"
 
       # ⚙️ Parámetros avanzados del Contextizer híbrido
-      use_hybrid: false           # Activa el modo híbrido adaptativo (TF-IDF + KeyBERT + embeddings)
+      use_hybrid: true          # Activa el modo híbrido adaptativo (TF-IDF + KeyBERT + embeddings)
       use_keybert: true          # Extrae keywords semánticas con SentenceTransformers
       enable_mmr: true           # Activa Maximal Marginal Relevance (reduce redundancia)
       hybrid_eps: 0.25           # Radio de vecindad (DBSCAN adaptativo)
@@ -105,8 +105,8 @@ stages:
       epsilon_prior: 0.05  # Priors (sesgos organizacionales)
 
       # --- Umbrales y control ---
-      ambig_threshold: 0.12       # Diferencia mínima para marcar ambigüedad
-      fallback_threshold: 0.10   # Confianza mínima antes de fallback genérico
+      ambig_threshold: 0.15       # Diferencia mínima para marcar ambigüedad
+      fallback_threshold: 0.15   # Confianza mínima antes de fallback genérico
       softmax_temp: 0.85           # Temperatura del softmax (controla confianza)
       disable_generic: false       # Si true, desactiva fallback genérico
 

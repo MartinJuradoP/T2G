@@ -328,7 +328,7 @@ TECH = OntologyDomain(
     aliases=[
         "benchmark", "reseña", "modelo", "gpu", "cpu", "latencia", "precisión",
         "tecnología", "hardware", "software", "review", "performance", "specs",
-        "accuracy", "ai", "model", "technology", "data", "inference", "training","news"
+        "accuracy", "ai", "model", "technology", "data", "inference", "training","news","artificial intelligence","machine learning","deep learning","neural network","Digital Transformation","emerging technology"
     ],
     negative_aliases={"contract", "disease", "invoice"},
     stopwords={"comparativa", "prueba", "resultado"},
@@ -501,65 +501,248 @@ GEO = OntologyDomain(
 # 📰 REVIEWS & NEWS Domain
 # ===========================================================================
 REVIEWS = OntologyDomain(
-    domain="reviews_and_news",
-    schema_name="review_text_v1",
-    weight=0.8,
+    domain="reviews_and_opinions",
+    schema_name="review_service_v3",
+    weight=0.9,
     aliases=[
-        "review", "reseña", "comentario", "opinión", "feedback", "news",
-        "noticia", "artículo", "prensa", "report", "headline", "calificación",
-        "score", "rating"
+        # Estructura general de reseñas
+        "review", "reseña", "comentario", "opinión", "feedback", "valoración",
+        "rating", "calificación", "testimonio", "experiencia",
+        # Polaridad positiva
+        "good", "great", "excellent", "amazing", "fantastic", "wonderful",
+        "awesome", "perfect", "delicious", "tasty", "friendly", "clean",
+        "fast", "fresh", "nice", "love", "best", "quick", "affordable",
+        # Polaridad negativa
+        "bad", "terrible", "awful", "disgusting", "horrible", "rude",
+        "slow", "dirty", "cold", "expensive", "worst", "unfriendly",
+        "inattentive", "burned", "stale", "mediocre", "poor",
+        # Aspectos del servicio
+        "food", "comida", "drink", "bebida", "coffee", "pizza", "burger",
+        "service", "servicio", "staff", "mesero", "waiter", "waitress",
+        "price", "precio", "atmosphere", "ambiente", "decor", "lugar",
+        "place", "restaurant", "restaurante", "menu", "porciones",
+        "cleanliness", "higiene", "customer", "cliente", "attitude",
+        "experience", "recomendado", "recommend",
+        # Complementos del contexto Yelp
+        "parking", "music", "bar", "dessert", "postre", "drink", "beer",
+        "wine", "happy hour", "reservation", "table", "crowded"
     ],
-    negative_aliases={"contract", "disease", "invoice"},
-    stopwords={"texto", "contenido", "nota"},
+    # Filtros y palabras neutrales
+    negative_aliases={"policy", "terms", "privacy", "contract"},
+    stopwords={"texto", "nota", "contenido"},
     entity_types=[
         EntityTypeDef(
             name="Review",
-            description="Opinion or evaluation by a user or critic.",
-            aliases=["reseña", "review", "comentario"],
+            description="Opinión de un usuario sobre un servicio, producto o establecimiento.",
+            aliases=["review", "reseña", "comentario", "opinión", "feedback"],
             attributes=[
                 AttributeDef(name="review_id"),
-                AttributeDef(name="stars", type="number"),
-                AttributeDef(name="date", type="date"),
-                AttributeDef(name="sentiment", type="string")
-            ]
+                AttributeDef(name="stars", type="number", description="Calificación (1–5 estrellas)."),
+                AttributeDef(name="sentiment", type="string", description="Polaridad general del texto."),
+                AttributeDef(name="subjectivity", type="number", description="Grado de opinión personal."),
+                AttributeDef(name="language", type="string"),
+            ],
         ),
         EntityTypeDef(
-            name="NewsArticle",
-            description="Published news article or report.",
-            aliases=["noticia", "artículo", "news"],
+            name="ServiceAspect",
+            description="Categoría específica evaluada dentro de la reseña.",
+            aliases=[
+                "food", "comida", "drink", "bebida", "service", "servicio", "staff",
+                "mesero", "waiter", "waitress", "ambiente", "price", "precio",
+                "decor", "cleanliness", "menu", "producto", "entorno"
+            ],
             attributes=[
-                AttributeDef(name="title"),
-                AttributeDef(name="publisher"),
-                AttributeDef(name="date", type="date"),
-                AttributeDef(name="sentiment", type="string")
+                AttributeDef(name="sentiment", type="string", description="Polaridad del aspecto."),
+                AttributeDef(name="intensity", type="number", description="Fuerza emocional de la expresión."),
+            ],
+        ),
+        EntityTypeDef(
+            name="Emotion",
+            description="Expresión emocional asociada a la experiencia (positiva o negativa).",
+            aliases=[
+                "happy", "sad", "angry", "satisfied", "frustrated",
+                "love", "hate", "amazing", "disgusted", "pleasant"
+            ],
+            attributes=[
+                AttributeDef(name="valence", type="number"),
+                AttributeDef(name="arousal", type="number"),
+            ],
+        ),
+        EntityTypeDef(
+            name="Business",
+            description="Negocio o establecimiento evaluado.",
+            aliases=[
+                "restaurant", "restaurante", "bar", "café", "hotel", "tienda",
+                "local", "empresa", "servicio"
+            ],
+            attributes=[
+                AttributeDef(name="category", type="string"),
+                AttributeDef(name="location", type="string"),
+            ],
+        ),
+    ],
+    relation_types=[
+        RelationTypeDef(name="written_by", head="Review", tail="Reviewer"),
+        RelationTypeDef(name="about", head="Review", tail="Business"),
+        RelationTypeDef(name="mentions_aspect", head="Review", tail="ServiceAspect"),
+        RelationTypeDef(name="expresses_emotion", head="Review", tail="Emotion"),
+    ],
+    notes=(
+        "Optimizado para reseñas cortas de plataformas como Yelp, Google Reviews o TripAdvisor. "
+        "Los embeddings se calculan por agrupamiento semántico de alias, "
+        "con centroides basados en polaridad y aspectos de servicio, "
+        "para evitar sesgos hacia otros dominios y mejorar la coherencia de categorización."
+    )
+)
+
+
+# ===========================================================================
+# 🧩 GENERIC Domain (universal fallback actualizado)
+# ===========================================================================
+GENERIC = OntologyDomain(
+    domain="generic",
+    schema_name="generic_text_v2",
+    weight=0.4,
+    aliases=[
+        # Conceptos transversales
+        "general", "documento", "texto", "registro", "mensaje", "post", "comentario",
+        "tweet", "publicación", "content", "note", "text", "comment", "article",
+        "file", "record", "entry"
+    ],
+    negative_aliases=set(),  # No penaliza ningún otro dominio
+    stopwords={"contenido", "archivo", "formato", "texto", "document"},
+    entity_types=[
+        # ------------------------------------------------------
+        # Identidad y entidades clásicas (fallback semántico)
+        # ------------------------------------------------------
+        EntityTypeDef(
+            name="Person",
+            description="Nombre de una persona física o usuario genérico.",
+            aliases=["persona", "nombre", "user", "autor", "writer"]
+        ),
+        EntityTypeDef(
+            name="Organization",
+            description="Entidad corporativa, institución, o grupo social.",
+            aliases=["empresa", "institución", "organization", "compañía", "grupo"]
+        ),
+        EntityTypeDef(
+            name="Date",
+            description="Fecha explícita o calendario formal.",
+            aliases=["fecha", "día", "año", "mes", "date"]
+        ),
+        EntityTypeDef(
+            name="DateExpression",
+            description="Referencia temporal relativa expresada en lenguaje natural.",
+            aliases=["ayer", "hoy", "mañana", "semana", "mes", "próximo", "pasado"]
+        ),
+        EntityTypeDef(
+            name="Location",
+            description="Lugar o referencia geográfica general.",
+            aliases=["ubicación", "ciudad", "país", "address", "lugar", "sitio"]
+        ),
+        EntityTypeDef(
+            name="Amount",
+            description="Cantidad numérica con posible valor monetario o métrico.",
+            aliases=["monto", "precio", "valor", "cantidad", "amount", "total"]
+        ),
+        EntityTypeDef(
+            name="Currency",
+            description="Símbolo o abreviatura de moneda.",
+            aliases=["usd", "eur", "mxn", "gbp", "¥", "₿", "$", "€"]
+        ),
+
+        # ------------------------------------------------------
+        # Entidades de comunicación digital y trazabilidad
+        # ------------------------------------------------------
+        EntityTypeDef(
+            name="URL",
+            description="Dirección o enlace web, completo o parcial (http, https, www).",
+            aliases=["url", "link", "website", "sitio web", "enlace"]
+        ),
+        EntityTypeDef(
+            name="EmailAddress",
+            description="Dirección de correo electrónico.",
+            aliases=["correo", "email", "mail", "e-mail"]
+        ),
+        EntityTypeDef(
+            name="PhoneNumber",
+            description="Número telefónico o de contacto.",
+            aliases=["teléfono", "número", "celular", "phone", "contacto"]
+        ),
+        EntityTypeDef(
+            name="SocialHandle",
+            description="Identificador o mención de usuario en redes sociales (@usuario).",
+            aliases=["usuario", "@", "handle", "cuenta", "perfil"]
+        ),
+        EntityTypeDef(
+            name="Hashtag",
+            description="Etiqueta temática usada en redes sociales (#tema).",
+            aliases=["hashtag", "#"]
+        ),
+        EntityTypeDef(
+            name="ReferenceCode",
+            description="Código de referencia, folio o identificador alfanumérico.",
+            aliases=["id", "folio", "ticket", "ref", "código", "identificador"]
+        ),
+        EntityTypeDef(
+            name="FileReference",
+            description="Referencia a nombre o ruta de archivo local o remoto.",
+            aliases=["archivo", ".pdf", ".docx", ".xls", ".csv", "documento"]
+        ),
+
+        # ------------------------------------------------------
+        # Expresiones emocionales o contextuales
+        # ------------------------------------------------------
+        EntityTypeDef(
+            name="Emoji",
+            description=(
+                "Símbolo Unicode que expresa emoción, reacción o idea (😊, 🚀, ❤️, etc.). "
+                "Se detecta mediante rango Unicode o regex, no mediante aliases explícitos."
+            ),
+            aliases=["emoji", "emoticon", "carita", "símbolo"],
+            attributes=[
+                AttributeDef(name="symbol", type="string"),
+                AttributeDef(
+                    name="category",
+                    type="string",
+                    description="Categoría semántica: emotion, object, activity, symbol, flag."
+                )
             ]
         ),
     ],
     relation_types=[
-        RelationTypeDef(name="published_by", head="NewsArticle", tail="Organization"),
-        RelationTypeDef(name="authored_by", head="Review", tail="Person"),
+        RelationTypeDef(
+            name="mentions",
+            head="Person",
+            tail="SocialHandle",
+            description="Una persona menciona o referencia a otra cuenta digital."
+        ),
+        RelationTypeDef(
+            name="links_to",
+            head="Document",
+            tail="URL",
+            description="Un texto o registro contiene un enlace a un sitio web."
+        ),
+        RelationTypeDef(
+            name="refers_to",
+            head="Document",
+            tail="ReferenceCode",
+            description="Documento o texto que incluye una referencia o código identificador."
+        ),
+        RelationTypeDef(
+            name="includes_emoji",
+            head="Document",
+            tail="Emoji",
+            description="Texto que contiene un símbolo emocional o expresivo."
+        ),
     ],
+    notes=(
+        "El dominio GENÉRICO actúa como fallback universal. Detecta patrones transversales "
+        "comunes en textos no clasificables (emails, publicaciones, notas, logs, etc.). "
+        "Incluye soporte para URLs, correos, teléfonos, hashtags, menciones, emojis y referencias."
+    ),
 )
 
-# ===========================================================================
-# 🧩 GENERIC Domain (fallback universal)
-# ===========================================================================
-GENERIC = OntologyDomain(
-    domain="generic",
-    schema_name="generic_text_v1",
-    weight=0.5,
-    aliases=[
-        "general", "documento", "texto", "registro", "file", "document", "record", "text"
-    ],
-    stopwords={"contenido", "archivo", "formato"},
-    entity_types=[
-        EntityTypeDef(name="Person", aliases=["persona", "nombre", "user"]),
-        EntityTypeDef(name="Organization", aliases=["empresa", "institución", "organization"]),
-        EntityTypeDef(name="Date", aliases=["fecha", "día", "año", "date"]),
-        EntityTypeDef(name="Location", aliases=["ubicación", "ciudad", "país", "address"]),
-        EntityTypeDef(name="Amount", aliases=["monto", "precio", "valor", "amount"]),
-    ],
-)
 
 # ===========================================================================
 # 🌐 GLOBAL REGISTRY
