@@ -150,19 +150,36 @@ from .registry_embeddings import build_label_vecs
 # Inicializa embeddings (usa cache si existe)
 REGISTRY = build_label_vecs()
 
-# Mapeo dominio → plantilla de esquema (ajústalo a tus plantillas reales)
-SCHEMA_BY_DOMAIN = {
-    "legal": "legal_contract_v1",
-    "medical": "medical_note_v1",
-    "financial": "financial_tx_v2",
-    "ecommerce": "ecommerce_order_v1",
-    "identity": "identity_record_v1",
-    "tech_review": "tech_review_v1",
-    "veterinary": "veterinary_case_v1",
-    "geopolitical": "geopolitical_event_v1",
-    "reviews": "review_text_v1",
-    "generic": "generic_text_v1",
-}
+# ============================================================
+# Schema Resolver — sincronizado con Registry
+# ============================================================
+from .registry import REGISTRY, RegistryHelper
+
+# Instancia auxiliar para normalizar nombres
+_HELPER = RegistryHelper(REGISTRY)
+
+def get_schema_for_domain(domain_name: str, registry=REGISTRY) -> str:
+    """
+    Devuelve el schema_name real definido en el Registry.
+    Si el dominio no existe o no tiene schema_name definido,
+    retorna 'generic' como fallback.
+    Compatible con sinónimos ('reviews' → 'reviews_and_opinions', etc.).
+    """
+    if not domain_name:
+        return "generic"
+
+    # Normaliza dominio con los sinónimos definidos en RegistryHelper
+    canon = _HELPER.normalize_domain(domain_name)
+    if not canon:
+        canon = "generic"
+
+    dom = _HELPER.get(canon)
+    if dom and getattr(dom, "schema_name", None):
+        return dom.schema_name
+
+    # fallback seguro
+    return "generic"
+
 
 
 # -----------------------------
@@ -238,7 +255,6 @@ def _domain_final_score(k: float, e: float, c: float, t: float, p: float, cfg: S
 # -----------------------------
 # Selección a nivel documento
 # -----------------------------
-
 def _select_doc_level(doc: Dict[str, Any],
                       cfg: SelectorConfig,
                       registry=REGISTRY,
@@ -269,7 +285,6 @@ def _select_doc_level(doc: Dict[str, Any],
 
         # Entity-type prioritization tokens: usamos keywords + tokens globales
         global_text_tokens = set(doc_kws)
-        # añadimos algunos tokens del propio texto (si existiera)
         for ch in doc.get("chunks", []):
             global_text_tokens |= set(normalize_tokens(ch.get("text", "") or ""))
         et_scores = _score_entity_types(sorted(global_text_tokens), dom.entity_types)
@@ -279,16 +294,16 @@ def _select_doc_level(doc: Dict[str, Any],
             Evidence(kind="embedding", detail=e_detail),
             Evidence(kind="topic", detail=t_detail),
             Evidence(kind="context", detail=ctx_detail),
-            Evidence(kind="prior", detail={"value": p})
+            Evidence(kind="prior", detail={"value": p}),
         ]
         domain_scores.append(DomainScore(
             domain=dom.domain,
             score=final,
             entity_type_scores=et_scores,
             evidence=ev,
-            decision_trace=trace
+            decision_trace=trace,
         ))
-     
+
     # Rank y top-domains
     domain_scores.sort(key=lambda d: d.score, reverse=True)
     top_domains = [d.domain for d in domain_scores[:cfg.topk]]
@@ -304,21 +319,24 @@ def _select_doc_level(doc: Dict[str, Any],
 
     # Fallback para textos muy cortos
     if doc_tokens < cfg.min_doc_tokens_for_domain and "generic" in top_domains:
-        # forzamos generic si no hay gaps fuertes
         top_domain = "generic"
-        selected_schema = SCHEMA_BY_DOMAIN.get(top_domain, "generic_text_v1")
-        explanation = f"Texto corto (tokens={doc_tokens}); se aplica fallback a '{top_domain}' con soporte de señales globales."
+        selected_schema = get_schema_for_domain(top_domain, registry)
+        explanation = (
+            f"Texto corto (tokens={doc_tokens}); "
+            f"se aplica fallback a '{top_domain}' con soporte de señales globales."
+        )
     else:
         top_domain = domain_scores[0].domain if domain_scores else "generic"
-        selected_schema = SCHEMA_BY_DOMAIN.get(top_domain, "generic_text_v1")
-        # Explicación basada en contribuciones
+        selected_schema = get_schema_for_domain(top_domain, registry)
         explanation = build_explanation(
             top_domain,
             domain_scores[0].decision_trace.contributions if domain_scores else {},
-            {"kw": domain_scores[0].evidence[0].detail if domain_scores else {},
-             "emb": domain_scores[0].evidence[1].detail if domain_scores else {},
-             "topic": domain_scores[0].evidence[2].detail if domain_scores else {}},
-            ctx_detail
+            {
+                "kw": domain_scores[0].evidence[0].detail if domain_scores else {},
+                "emb": domain_scores[0].evidence[1].detail if domain_scores else {},
+                "topic": domain_scores[0].evidence[2].detail if domain_scores else {},
+            },
+            ctx_detail,
         )
 
     doc_sel = DocSchemaSelection(
@@ -330,10 +348,9 @@ def _select_doc_level(doc: Dict[str, Any],
         explanation=explanation,
         signals_used=["keywords", "embeddings", "topics", "context", "prior"],
         weights_used=cfg.weights(),
-        ambiguous=ambiguous
+        ambiguous=ambiguous,
     )
     return doc_sel, top_domains, domain_scores
-
 
 def count_tokens_doc(doc: Dict[str, Any]) -> int:
     total = 0
@@ -341,11 +358,9 @@ def count_tokens_doc(doc: Dict[str, Any]) -> int:
         total += len(normalize_tokens(ch.get("text", "") or ""))
     return total
 
-
 # -----------------------------
 # Selección a nivel chunk
 # -----------------------------
-
 def _select_chunk_level(doc: Dict[str, Any],
                         cfg: SelectorConfig,
                         doc_top_domains: List[str],
@@ -354,7 +369,6 @@ def _select_chunk_level(doc: Dict[str, Any],
     priors = priors or {}
     selections: List[ChunkSchemaSelection] = []
 
-    # Limitar evaluación a top-domains del doc + always_include
     allowed = set(doc_top_domains) | set(cfg.always_include or [])
     eval_domains = [d for d in registry.domains if d.domain in allowed] or registry.domains
 
@@ -369,11 +383,10 @@ def _select_chunk_level(doc: Dict[str, Any],
         tok = set(ch_kws) | set(normalize_tokens(ch.get("text", "") or ""))
 
         for dom in eval_domains:
-            # Señales para el chunk
             k, k_detail = keyword_f1(ch_kws, dom.aliases)
             e, e_detail = _embedding_score(ch_vec, dom.label_vecs)
-            # topic_affinity a nivel chunk: reusamos la función doc pero con doc restringido no es ideal.
-            # Simplificación local: Jaccard chunk-keywords vs domain.aliases
+
+            # Simplificación local para topic_affinity
             j_inter = len(set(ch_kws) & set(map(str.lower, dom.aliases)))
             j_union = len(set(ch_kws) | set(map(str.lower, dom.aliases)))
             t = (j_inter / j_union) if j_union else 0.0
@@ -390,29 +403,31 @@ def _select_chunk_level(doc: Dict[str, Any],
                 Evidence(kind="embedding", detail=e_detail),
                 Evidence(kind="topic", detail=t_detail),
                 Evidence(kind="context", detail=c_detail),
-                Evidence(kind="prior", detail={"value": p})
+                Evidence(kind="prior", detail={"value": p}),
             ]
             ch_domain_scores.append(DomainScore(
                 domain=dom.domain,
                 score=final,
                 entity_type_scores=et_scores,
                 evidence=ev,
-                decision_trace=trace
+                decision_trace=trace,
             ))
 
         ch_domain_scores.sort(key=lambda d: d.score, reverse=True)
         top_domain = ch_domain_scores[0].domain if ch_domain_scores else None
-        selected_schema = SCHEMA_BY_DOMAIN.get(top_domain or "generic", "generic_text_v1")
+        selected_schema = get_schema_for_domain(top_domain or "generic", registry)
         confidence = softmax_confidence([d.score for d in ch_domain_scores], temperature=cfg.softmax_temperature)
         ambiguous = (len(ch_domain_scores) > 1 and abs(ch_domain_scores[0].score - ch_domain_scores[1].score) < cfg.ambiguity_threshold)
 
         explanation = build_explanation(
             top_domain or "generic",
             ch_domain_scores[0].decision_trace.contributions if ch_domain_scores else {},
-            {"kw": ch_domain_scores[0].evidence[0].detail if ch_domain_scores else {},
-             "emb": ch_domain_scores[0].evidence[1].detail if ch_domain_scores else {},
-             "topic": ch_domain_scores[0].evidence[2].detail if ch_domain_scores else {}},
-            c_detail
+            {
+                "kw": ch_domain_scores[0].evidence[0].detail if ch_domain_scores else {},
+                "emb": ch_domain_scores[0].evidence[1].detail if ch_domain_scores else {},
+                "topic": ch_domain_scores[0].evidence[2].detail if ch_domain_scores else {},
+            },
+            c_detail,
         )
 
         selections.append(ChunkSchemaSelection(
@@ -424,7 +439,7 @@ def _select_chunk_level(doc: Dict[str, Any],
             explanation=explanation,
             signals_used=["keywords", "embeddings", "topics", "context", "prior"],
             weights_used=cfg.weights(),
-            ambiguous=ambiguous
+            ambiguous=ambiguous,
         ))
 
     return selections
@@ -461,10 +476,14 @@ def select_schemas(doc: Dict[str, Any],
         "signals": ["keywords(F1)", "embeddings(cos)", "topics(Jaccard/weighted)", "context(multi-metric)", "prior"],
     }
 
+    
+
     # Fallback genérico si la confianza doc-level cae por debajo del umbral
     if doc_sel.schema_confidence < config.fallback_threshold and config.allow_fallback_generic:
         doc_sel.top_domains = list(dict.fromkeys(doc_sel.top_domains + ["generic"]))[:config.max_domains]
-        doc_sel.selected_schema = SCHEMA_BY_DOMAIN["generic"]
-        doc_sel.explanation = (doc_sel.explanation or "") + " | Confianza baja: se prepara esquema genérico como respaldo."
-
+        doc_sel.selected_schema = get_schema_for_domain("generic", registry)
+        doc_sel.explanation = (
+            (doc_sel.explanation or "")
+            + " | Confianza baja: se prepara esquema genérico como respaldo."
+        )
     return SchemaSelection(doc=doc_sel, chunks=chunks_sel, meta=meta)

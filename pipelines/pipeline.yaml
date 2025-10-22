@@ -116,3 +116,17 @@ stages:
 
       # 💡 Salida: JSON con distribución de scores por dominio
       # Este resultado alimentará futuras etapas (Mentions / Graph)
+  # ─────────────────────────────────────────────────────────────
+  # 6 MENTIONS — Extracción de entidades (LLM-only, schema-aware)
+  # ─────────────────────────────────────────────────────────────
+  - name: mentions
+    args:
+      chunks_glob: "outputs_chunks/*.json"
+      schema_dir: "outputs_schema"
+      outdir: "outputs_mentions"
+      clean_outdir: true
+      llm_model: "gpt-4o-mini"
+      temperature: 0.1
+      max_tokens: 8000          # subir para ventanas grandes
+      confidence_threshold: 0.20 # bajar un poco para no perder menciones borderline
+

@@ -29,12 +29,8 @@
 | 3 | **HybridChunker** | Segmenta documento en **chunks semánticos estables (≤2048 tokens)** | `DocumentIR+Topics` | `DocumentChunks` JSON | ✅ |
 | 4 | **Hybrid Contextizer (chunk)** | Asigna tópicos locales a cada chunk (subtemas); enlaza con tópicos globales | `DocumentChunks` | `Chunks+Topics` JSON | ✅ |
 | 5 | **Adaptive Schema Selector** | Define dinámicamente entidades relevantes según contexto | `Chunks+Topics` | `SchemaSelection` JSON | 🔜 |
-| 6 | **Mentions (NER/RE)** | Detecta menciones condicionadas por tópicos | `Chunks+Topics` | `Mentions` JSON | 🔜 |
-| 7 | **Clustering de Menciones** | Agrupa spans en clusters semánticos | `Mentions` JSON | `Clusters` JSON | 🔜 |
-| 8 | **Weak Supervision / Label** | Etiqueta clusters de alta confianza (Snorkel-style) | `Clusters` | `LabeledClusters` JSON | 🔜 |
-| 9 | **LLM Intervention** | Clasifica clusters ambiguos con **few-shot prompting o prototipos** | `Clusters` | `RefinedLabels` JSON | 🔜 |
-| 10 | **Normalización (híbrida)** | Canonicaliza entidades y estandariza representaciones | `Mentions/Clusters` | `Entities` JSON | 🔜 |
-| 11 | **Graph Export** | Publica entidades y relaciones en grafos (Neo4j, GraphDB, RDF/SHACL) | `Entities+Triples` | Grafo / DB | 🔜 |
+| 6 | **Mentions (NER/RE) LLM** | Detecta menciones condicionadas por tópicos | `Chunks+Topics` | `Mentions` JSON | 🔜 |
+| * | **Graph Export** | Publica entidades y relaciones en grafos (Neo4j, GraphDB, RDF/SHACL) | `Entities+Triples` | Grafo / DB | 🔜 |
 
 ---
 

@@ -34,3 +34,7 @@ sentence-transformers>=2.6,<2.8
 # -- Topic Modeling ---
 # -- KeyBERT
 keybert>=0.8,<0.9
+# -- Gensim
+openai>=1.44.0
+python-dotenv>=1.0.1
+ipython>=8.12.0

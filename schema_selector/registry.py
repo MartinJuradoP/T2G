@@ -20,6 +20,10 @@ Cada dominio contiene:
 - **Relation Types:** relaciones semánticas entre entidades del mismo dominio.
 - **Schema Name:** nombre del esquema que se usará para la extracción NER/RE
   cuando este dominio sea detectado.
+ - Mapear nombres del selector -> dominios internos del registry (sinónimos).
+  * Exponer entidades, relaciones y aliases por dominio de forma uniforme.
+  * Construir bloques compactos para inyectar en prompts.
+- No rompe compatibilidad: mantiene las clases/constantes anteriores (MEDICAL, LEGAL,
 
 Características clave:
 ----------------------
@@ -35,79 +39,72 @@ específico.
 """
 
 from __future__ import annotations
-from typing import List, Dict, Set, Optional
+from typing import List, Dict, Set, Optional, Tuple
 from pydantic import BaseModel, Field, model_validator
 from collections import defaultdict
 import json
 import pandas as pd
 
-# Importamos las estructuras base
+# Importa contratos base del selector (compatibles)
 from .schemas import (
-    OntologyDomain,
-    OntologyRegistry,
+    OntologyDomain as _BaseOntologyDomain,
+    OntologyRegistry as _BaseOntologyRegistry,
     EntityTypeDef,
     AttributeDef,
-    RelationTypeDef
+    RelationTypeDef,
 )
+
 
 # ===========================================================================
 #  Clases extendidas con validación y trazabilidad
 # ===========================================================================
-
-class OntologyDomain(OntologyDomain):
-    """Extiende OntologyDomain con soporte para alias negativos, stopwords y auditoría."""
-
-    stopwords: Set[str] = Field(default_factory=set, description="Palabras genéricas a ignorar.")
-    negative_aliases: Set[str] = Field(default_factory=set, description="Términos que penalizan la selección del dominio.")
-    weight: float = Field(default=1.0, description="Peso relativo del dominio.")
-    schema_name: str = Field(default="generic_text_v1", description="Nombre del esquema asociado al dominio.")
+class OntologyDomain(_BaseOntologyDomain):
+    """Extiende para alias negativos, stopwords, peso y schema_name (sin romper contratos base)."""
+    stopwords: Set[str] = Field(default_factory=set)
+    negative_aliases: Set[str] = Field(default_factory=set)
+    weight: float = Field(default=1.0)
+    schema_name: str = Field(default="generic_text_v1")
     notes: Optional[str] = None
 
     @model_validator(mode="after")
-    def validate_aliases(self) -> "OntologyDomain":
-        """Valida y normaliza alias, stopwords y negativos."""
+    def _normalize_lists(self) -> "OntologyDomain":
         self.aliases = sorted(set(a.strip().lower() for a in self.aliases if a))
         self.stopwords = set(w.lower().strip() for w in self.stopwords)
         self.negative_aliases = set(w.lower().strip() for w in self.negative_aliases)
-
-        # Evita conflictos entre listas
+        # Evita choques básicos
         overlap = set(self.aliases) & set(self.negative_aliases)
         if overlap:
             raise ValueError(f"Alias conflictivos en dominio '{self.domain}': {overlap}")
         return self
 
-    def describe(self, max_entities: int = 3) -> str:
-        """Devuelve un resumen legible del dominio y sus componentes."""
-        ents = ", ".join(e.name for e in self.entity_types[:max_entities])
-        rels = ", ".join(r.name for r in self.relation_types[:max_entities])
+    # Utilidades legibles (no usadas por pydantic)
+    def entity_names(self) -> List[str]:
+        return [e.name for e in self.entity_types]
+
+    def relation_names(self) -> List[str]:
+        return [r.name for r in self.relation_types]
+
+    def to_prompt_block(self, alias_limit: int = 15) -> str:
+        ents = ", ".join(self.entity_names()) or "(sin entidades)"
+        rels = ", ".join(self.relation_names()) or "(sin relaciones)"
+        aliases = ", ".join(list(self.aliases)[:alias_limit]) or "(sin aliases)"
         return (
-            f"🔹 {self.domain.upper()} — {len(self.aliases)} alias "
-            f"({len(self.entity_types)} entidades, {len(self.relation_types)} relaciones)\n"
-            f"  Ejemplos entidades: {ents or 'N/A'}\n"
-            f"  Relaciones: {rels or 'N/A'}\n"
+            f"- **{self.domain.upper()}**:\n"
+            f"    • Entidades → {ents}\n"
+            f"    • Relaciones → {rels}\n"
+            f"    • Aliases → {aliases}"
         )
 
 
-class OntologyRegistry(OntologyRegistry):
-    """Ontología global con validación y funciones de auditoría."""
+class OntologyRegistry(_BaseOntologyRegistry):
+    """Ontología global con extras de auditoría (mantiene API get_domain original)."""
 
     domains: List[OntologyDomain] = Field(default_factory=list)
 
-    @model_validator(mode="after")
-    def validate_unique_domains(self) -> "OntologyRegistry":
-        names = [d.domain.lower() for d in self.domains]
-        if len(names) != len(set(names)):
-            raise ValueError(f"Dominios duplicados detectados: {names}")
-        return self
-
-    # ----------------------------------------------------------------------
-    # Funciones de auditoría y control de calidad
-    # ----------------------------------------------------------------------
     def summary_table(self) -> pd.DataFrame:
-        """Muestra un resumen tabular de todos los dominios definidos."""
-        data = []
+        rows = []
         for d in self.domains:
-            data.append({
+            rows.append({
                 "Domain": d.domain,
                 "#Aliases": len(d.aliases),
                 "#Stopwords": len(d.stopwords),
@@ -115,12 +112,11 @@ class OntologyRegistry(OntologyRegistry):
                 "#Entities": len(d.entity_types),
                 "#Relations": len(d.relation_types),
                 "Weight": d.weight,
-                "Schema": d.schema_name
+                "Schema": d.schema_name,
             })
-        return pd.DataFrame(data).sort_values(by="Domain")
+        return pd.DataFrame(rows).sort_values(by="Domain")
 
     def conflicts_matrix(self) -> pd.DataFrame:
-        """Matriz de solapamiento de alias entre dominios (para detectar ambigüedad léxica)."""
         doms = [d.domain for d in self.domains]
         overlap = defaultdict(dict)
         for d1 in self.domains:
@@ -134,10 +130,9 @@ class OntologyRegistry(OntologyRegistry):
         return pd.DataFrame(overlap).T.loc[doms, doms]
 
     def export_json(self, path: str = "registry_audit.json") -> None:
-        """Exporta la ontología completa a JSON (para auditoría o versionado)."""
         with open(path, "w", encoding="utf-8") as f:
             json.dump(self.model_dump(mode="json"), f, indent=2, ensure_ascii=False)
-        print(f"✅ Ontología exportada a {path}")
+
 # ===========================================================================
 # 🩺 MEDICAL Domain
 # ===========================================================================
@@ -229,7 +224,9 @@ LEGAL = OntologyDomain(
         EntityTypeDef(
             name="Party",
             description="Person or organization in a legal agreement.",
-            aliases=["parte", "firmante", "persona", "empresa", "party"],
+            aliases=["parte", "firmante", "persona", "empresa", "party","contratante", "el contratante",
+            "prestador", "el prestador",
+            "proveedor", "cliente"],
             attributes=[AttributeDef(name="name"), AttributeDef(name="role")]
         ),
         EntityTypeDef(
@@ -240,6 +237,19 @@ LEGAL = OntologyDomain(
                 AttributeDef(name="effective_date", type="date"),
                 AttributeDef(name="term", type="string"),
                 AttributeDef(name="jurisdiction", type="string")
+            ]
+        ),
+        EntityTypeDef(
+            name="Representative",
+            description="Legal representative or attorney-in-fact of a party.",
+            aliases=[
+                "apoderado", "apoderador", "apoderamiento",
+                "representante legal", "representante", "signatario", "apod."
+            ],
+            attributes=[
+                AttributeDef(name="name"),
+                AttributeDef(name="title", type="string"),
+                AttributeDef(name="power_scope", type="string", description="Alcance del poder")
             ]
         ),
         EntityTypeDef(
@@ -270,18 +280,86 @@ LEGAL = OntologyDomain(
 # ===========================================================================
 FINANCIAL = OntologyDomain(
     domain="financial",
-    schema_name="financial_tx_v2",
+    schema_name="financial_unified_v1",
     weight=1.0,
     aliases=[
-        "finanzas", "factura", "transacción", "pago", "banco", "seguro", "mercado",
-        "divisa", "acción", "presupuesto", "bolsa", "cotización", "exchange",
-        "finance", "investment", "stock", "currency", "insurance", "loan",
-        "interest", "policy", "equity", "earnings", "revenue", "ingresos","P&L","Margin","ROI",
-        "financials", "trading", "comercio","earnings per share", "profit margin", "EPS", "Dividend","foreign exchange","FX","mutual fund","hedge fund"
+        # ----------------------------
+        # Conceptos generales de finanzas y economía
+        # ----------------------------
+        "finanzas", "economía", "mercado", "bolsa", "cotización", "acción", "acciones",
+        "capital", "inversión", "divisa", "interés", "seguro", "pago", "banco",
+        "presupuesto", "loan", "credito", "interés compuesto", "policy", "póliza",
+        "beneficio", "loss", "profit", "revenue", "ingresos", "gasto", "expense",
+        "income statement", "balance sheet", "cash flow", "financial statement",
+        "finance", "accounting", "investment", "fund", "trading", "exchange",
+        "foreign exchange", "FX", "hedge fund", "mutual fund", "ETF", "bond",
+        "derivative", "futures", "options", "swap",
+
+        # ----------------------------
+        # Indicadores y métricas financieras
+        # ----------------------------
+        "EPS", "earnings per share", "P/E", "PE ratio", "PEG", "ROE", "ROI", "ROA",
+        "EBITDA", "EBIT", "margin", "profit margin", "gross margin",
+        "revenue growth", "operating income", "net income", "cash flow", "valuation",
+        "market cap", "price target", "forecast", "guidance", "outlook",
+        "consensus estimate", "Zacks Rank", "rating", "buy", "sell", "hold",
+        "outperform", "underperform", "dividend", "yield", "return on investment",
+        "leverage", "liquidity ratio", "P&L", "ROI", "ROIC", "EPS estimate",
+
+        # ----------------------------
+        # Índices, tickers y entidades de mercado
+        # ----------------------------
+        "stock", "ticker", "index", "indice", "benchmark",
+        "NASDAQ", "Dow Jones", "S&P 500", "SPX", "DJI", "NYSE",
+        "Russell 2000", "FTSE", "Nikkei", "IBEX", "Bovespa", "DAX", "CAC 40",
+        "Utilities", "Technology", "Energy", "Banking", "Insurance", "AI sector",
+
+        # ----------------------------
+        # Documentos, operaciones y entidades financieras
+        # ----------------------------
+        "factura", "invoice", "transacción", "transaction", "transfer", "payment",
+        "budget", "presupuesto", "loan", "credit", "interest rate", "claim",
+        "compensation", "policy", "insurance", "premium", "account", "bank account",
+
+        # ----------------------------
+        # Negocios, startups, fusiones y adquisiciones
+        # ----------------------------
+        "corporate", "business", "startup", "enterprise", "company", "corporation",
+        "IPO", "secondary share sale", "funding", "round", "series A", "series B",
+        "investment round", "valuation", "market capitalization",
+        "merger", "acquisition", "deal", "partnership", "infrastructure deal",
+        "private equity", "venture capital", "capital raise", "investor", "shareholder",
+
+        # ----------------------------
+        # Roles ejecutivos y jerarquías
+        # ----------------------------
+        "CEO", "CFO", "COO", "CTO", "executive", "founder", "chairman",
+        "board member", "investor", "analyst", "senior vice president",
+
+        # ----------------------------
+        # Eventos, conferencias y comunicados
+        # ----------------------------
+        "conference", "press briefing", "developer event", "announcement",
+        "launch", "earnings call", "update", "product release",
+        "share sale", "investor day", "analyst meeting", "annual report",
+
+        # ----------------------------
+        # Sectores e industrias relacionadas
+        # ----------------------------
+        "AI", "technology", "software", "hardware", "semiconductor", "chip",
+        "utilities", "energy", "banking", "insurance", "automotive", "retail",
+        "media", "telecom", "manufacturing", "infrastructure",
     ],
-    negative_aliases={"hospital", "doctor", "contract", "disease"},
-    stopwords={"monto", "total", "fecha"},
+    negative_aliases={"hospital", "doctor", "contract", "disease", "recipe"},
+    stopwords={"monto", "total", "fecha", "número", "porcentaje"},
+
+    # =====================================================
+    # ENTITY TYPES
+    # =====================================================
     entity_types=[
+        # -----------------------------------------------------
+        # Entidades tradicionales (documentos y cuentas)
+        # -----------------------------------------------------
         EntityTypeDef(
             name="Invoice",
             description="Document for transaction of goods or services.",
@@ -311,10 +389,125 @@ FINANCIAL = OntologyDomain(
                 AttributeDef(name="bank", type="string")
             ]
         ),
+
+        # -----------------------------------------------------
+        # Entidades de mercado y bursátiles
+        # -----------------------------------------------------
+        EntityTypeDef(
+            name="Stock",
+            description="Public company share traded on the market.",
+            aliases=["acción", "stock", "ticker", "equity"],
+            attributes=[
+                AttributeDef(name="symbol", type="string"),
+                AttributeDef(name="price", type="number"),
+                AttributeDef(name="index", type="string"),
+                AttributeDef(name="change_percent", type="number"),
+            ]
+        ),
+        EntityTypeDef(
+            name="Ticker",
+            description=(
+                "Unique symbol used to identify a publicly traded stock or index on an exchange. "
+                "Includes both company tickers (e.g., AAPL, MSFT) and index symbols (e.g., ^SPX, ^DJI)."
+            ),
+            aliases=["ticker", "símbolo", "stock symbol", "market symbol", "trading symbol"],
+            attributes=[
+                AttributeDef(name="symbol", type="string"),
+                AttributeDef(name="exchange", type="string"),
+                AttributeDef(name="price", type="number"),
+                AttributeDef(name="change_percent", type="number"),
+                AttributeDef(name="as_of_date", type="date"),
+            ]
+        ),
+
+        EntityTypeDef(
+            name="Index",
+            description="Market index aggregating multiple stocks.",
+            aliases=["index", "indice", "benchmark", "SPX", "DJI", "NASDAQ"],
+            attributes=[
+                AttributeDef(name="name", type="string"),
+                AttributeDef(name="change_percent", type="number"),
+            ]
+        ),
+        EntityTypeDef(
+            name="EarningsReport",
+            description="Company financial disclosure (quarterly or annual).",
+            aliases=["earnings", "quarterly report", "financial results", "EPS", "guidance"],
+            attributes=[
+                AttributeDef(name="eps", type="number"),
+                AttributeDef(name="revenue", type="number"),
+                AttributeDef(name="forecast", type="number"),
+                AttributeDef(name="date", type="date"),
+            ]
+        ),
+
+        # -----------------------------------------------------
+        # Entidades corporativas y de negocio
+        # -----------------------------------------------------
+        EntityTypeDef(
+            name="Company",
+            description="An organization or corporation involved in financial or commercial activity.",
+            aliases=["company", "corporation", "startup", "business", "enterprise"],
+            attributes=[
+                AttributeDef(name="name", type="string"),
+                AttributeDef(name="industry", type="string"),
+                AttributeDef(name="valuation", type="number"),
+                AttributeDef(name="revenue", type="number"),
+                AttributeDef(name="headquarters", type="string"),
+            ]
+        ),
+        EntityTypeDef(
+            name="Executive",
+            description="Corporate leader or senior official.",
+            aliases=["CEO", "CFO", "COO", "CTO", "executive", "founder", "chairman"],
+            attributes=[
+                AttributeDef(name="name", type="string"),
+                AttributeDef(name="role", type="string"),
+                AttributeDef(name="company", type="string"),
+            ]
+        ),
+        EntityTypeDef(
+            name="InvestmentRound",
+            description="A financial event involving capital raising or share sale.",
+            aliases=["funding", "round", "series A", "series B", "IPO", "secondary share sale"],
+            attributes=[
+                AttributeDef(name="round_type", type="string"),
+                AttributeDef(name="amount", type="number"),
+                AttributeDef(name="investors", type="list"),
+                AttributeDef(name="date", type="date"),
+            ]
+        ),
+        EntityTypeDef(
+            name="Partnership",
+            description="Collaboration or deal between companies.",
+            aliases=["deal", "partnership", "agreement", "infrastructure deal"],
+            attributes=[
+                AttributeDef(name="partners", type="list"),
+                AttributeDef(name="sector", type="string"),
+                AttributeDef(name="value", type="number"),
+            ]
+        ),
     ],
+
+    # =====================================================
+    # RELATION TYPES
+    # =====================================================
     relation_types=[
+        # Relaciones básicas de transacción
         RelationTypeDef(name="paid_by", head="Transaction", tail="Account"),
         RelationTypeDef(name="covered_by", head="Invoice", tail="Policy"),
+
+        # Relaciones bursátiles y de reporte
+        RelationTypeDef(name="belongs_to_index", head="Stock", tail="Index"),
+        RelationTypeDef(name="reports", head="Organization", tail="EarningsReport"),
+        RelationTypeDef(name="reported", head="Company", tail="EarningsReport"),
+
+        # Relaciones corporativas y de inversión
+        RelationTypeDef(name="led_by", head="Company", tail="Executive"),
+        RelationTypeDef(name="raised_in", head="Company", tail="InvestmentRound"),
+        RelationTypeDef(name="partnered_with", head="Company", tail="Company"),
+        RelationTypeDef(name="invested_in", head="Investor", tail="Company"),
+        RelationTypeDef(name="analyzed_by", head="Stock", tail="Analyst"),
     ],
 )
 
@@ -601,7 +794,7 @@ REVIEWS = OntologyDomain(
 # ===========================================================================
 GENERIC = OntologyDomain(
     domain="generic",
-    schema_name="generic_text_v2",
+    schema_name="generic",
     weight=0.4,
     aliases=[
         # Conceptos transversales
@@ -652,47 +845,124 @@ GENERIC = OntologyDomain(
         ),
 
         # ------------------------------------------------------
-        # Entidades de comunicación digital y trazabilidad
+        # Identificadores y trazabilidad
+        # ------------------------------------------------------
+        EntityTypeDef(
+            name="Identifier",
+            description="Código o número de identificación genérico (ID, RFC, folio, ticket, referencia).",
+            aliases=["id", "rfc", "folio", "ticket", "ref", "identificador", "código", "codigo", "no."]
+        ),
+        EntityTypeDef(
+            name="ReferenceCode",
+            description="Código de referencia o identificador alfanumérico dentro del documento.",
+            aliases=["referencia", "reference", "code", "clave", "número", "num", "serie"]
+        ),
+        EntityTypeDef(
+            name="DocumentID",
+            description="Número o clave de documento formal (RFC, INE, pasaporte, etc.).",
+            aliases=["rfc", "ine", "passport", "dni", "id", "identificación", "identidad"]
+        ),
+        EntityTypeDef(
+            name="AccountNumber",
+            description="Número de cuenta o referencia bancaria.",
+            aliases=["cuenta", "account", "iban", "clabe", "bank", "banco"]
+        ),
+        EntityTypeDef(
+            name="TransactionCode",
+            description="Código de transacción o folio de operación.",
+            aliases=["transacción", "transaction", "operación", "folio", "txid"]
+        ),
+        EntityTypeDef(
+            name="Barcode",
+            description="Código de barras o QR detectado textual o visualmente.",
+            aliases=["barcode", "código de barras", "qr", "qr code", "etiqueta"]
+        ),
+
+        # ------------------------------------------------------
+        # Comunicación digital, contacto y trazabilidad técnica
         # ------------------------------------------------------
         EntityTypeDef(
             name="URL",
             description="Dirección o enlace web, completo o parcial (http, https, www).",
-            aliases=["url", "link", "website", "sitio web", "enlace"]
+            aliases=["url", "link", "website", "sitio", "web", "enlace", "http", "https", "www"]
         ),
         EntityTypeDef(
             name="EmailAddress",
             description="Dirección de correo electrónico.",
-            aliases=["correo", "email", "mail", "e-mail"]
+            aliases=["correo", "correo electrónico", "email", "mail", "e-mail", "contacto@"]
         ),
         EntityTypeDef(
             name="PhoneNumber",
             description="Número telefónico o de contacto.",
-            aliases=["teléfono", "número", "celular", "phone", "contacto"]
+            aliases=["teléfono", "telefono", "número", "celular", "móvil", "movil", "phone", "contacto", "whatsapp", "fax"]
+        ),
+        EntityTypeDef(
+            name="Address",
+            description="Dirección física o postal completa o parcial (calle, colonia, ciudad, CP).",
+            aliases=["domicilio", "dirección", "address", "calle", "avenida", "colonia", "cp", "código postal", "postal"]
+        ),
+        EntityTypeDef(
+            name="IPAddress",
+            description="Dirección IP (IPv4 o IPv6) usada en trazabilidad o metadatos técnicos.",
+            aliases=["ip", "ipv4", "ipv6", "ip address"]
         ),
         EntityTypeDef(
             name="SocialHandle",
             description="Identificador o mención de usuario en redes sociales (@usuario).",
-            aliases=["usuario", "@", "handle", "cuenta", "perfil"]
+            aliases=["usuario", "@", "handle", "cuenta", "perfil", "user", "nickname"]
         ),
         EntityTypeDef(
             name="Hashtag",
             description="Etiqueta temática usada en redes sociales (#tema).",
-            aliases=["hashtag", "#"]
-        ),
-        EntityTypeDef(
-            name="ReferenceCode",
-            description="Código de referencia, folio o identificador alfanumérico.",
-            aliases=["id", "folio", "ticket", "ref", "código", "identificador"]
+            aliases=["hashtag", "#", "etiqueta"]
         ),
         EntityTypeDef(
             name="FileReference",
             description="Referencia a nombre o ruta de archivo local o remoto.",
-            aliases=["archivo", ".pdf", ".docx", ".xls", ".csv", "documento"]
+            aliases=["archivo", "documento", "imagen", "foto", "adjunto", "attachment", ".pdf", ".docx", ".xls", ".csv", ".jpg", ".png"]
         ),
 
         # ------------------------------------------------------
-        # Expresiones emocionales o contextuales
+        # Valores, medidas y unidades
         # ------------------------------------------------------
+        EntityTypeDef(
+            name="Percentage",
+            description="Valor porcentual expresado en el texto.",
+            aliases=["porcentaje", "%", "percent"]
+        ),
+        EntityTypeDef(
+            name="Measurement",
+            description="Unidad de medida genérica (kg, m, cm, L, etc.).",
+            aliases=["medida", "kg", "m", "cm", "litro", "unidad", "measurement"]
+        ),
+
+        # ------------------------------------------------------
+        # Temporalidad extendida
+        # ------------------------------------------------------
+        EntityTypeDef(
+            name="Time",
+            description="Hora o expresión temporal específica (hh:mm, AM/PM, etc.).",
+            aliases=["hora", "minuto", "segundo", "am", "pm", "tiempo"]
+        ),
+        EntityTypeDef(
+            name="Duration",
+            description="Periodo de tiempo o duración expresada naturalmente.",
+            aliases=["duración", "periodo", "semana", "meses", "años", "horas", "días"]
+        ),
+
+        # ------------------------------------------------------
+        # Expresiones emocionales, valorativas o de acción
+        # ------------------------------------------------------
+        EntityTypeDef(
+            name="Sentiment",
+            description="Expresión de emoción o valoración (positivo, negativo, neutral).",
+            aliases=["bueno", "malo", "increíble", "terrible", "excelente", "horrible", "positivo", "negativo"]
+        ),
+        EntityTypeDef(
+            name="ActionVerb",
+            description="Verbos de acción genéricos en texto (comprar, enviar, cancelar, etc.).",
+            aliases=["comprar", "pagar", "enviar", "cancelar", "registrar", "firmar", "aceptar"]
+        ),
         EntityTypeDef(
             name="Emoji",
             description=(
@@ -710,6 +980,10 @@ GENERIC = OntologyDomain(
             ]
         ),
     ],
+
+    # ------------------------------------------------------
+    # Relaciones genéricas frecuentes
+    # ------------------------------------------------------
     relation_types=[
         RelationTypeDef(
             name="mentions",
@@ -735,14 +1009,30 @@ GENERIC = OntologyDomain(
             tail="Emoji",
             description="Texto que contiene un símbolo emocional o expresivo."
         ),
+        RelationTypeDef(
+            name="has_contact",
+            head="Organization",
+            tail="PhoneNumber",
+            description="Una organización tiene asociado un número de contacto o teléfono."
+        ),
+        RelationTypeDef(
+            name="located_at",
+            head="Organization",
+            tail="Address",
+            description="Entidad o persona localizada en una dirección física."
+        ),
     ],
+
+    # ------------------------------------------------------
+    # Notas de dominio
+    # ------------------------------------------------------
     notes=(
         "El dominio GENÉRICO actúa como fallback universal. Detecta patrones transversales "
-        "comunes en textos no clasificables (emails, publicaciones, notas, logs, etc.). "
-        "Incluye soporte para URLs, correos, teléfonos, hashtags, menciones, emojis y referencias."
+        "comunes en textos no clasificables (emails, publicaciones, notas, logs, formularios, etc.). "
+        "Incluye soporte para teléfonos, direcciones, URLs, correos, identificadores, emojis, "
+        "y referencias de archivo o cuenta."
     ),
 )
-
 
 # ===========================================================================
 # 🌐 GLOBAL REGISTRY
@@ -753,5 +1043,106 @@ REGISTRY = OntologyRegistry(
         ECOMMERCE, VETERINARY, GEO, REVIEWS, GENERIC
     ]
 )
+# ===========================================================================
+# 🧭 RegistryHelper — Capa de compatibilidad con el Selector
+# ===========================================================================
 
+class RegistryHelper:
+    """
+    Provee utilidades para:
+    - Normalizar nombres de dominio (selector -> registry).
+    - Resolver sinónimos.
+    - Exponer entidades/relaciones/aliases para prompts.
+    - Construir listas de dominios permitidos (allowed) con fallback 'generic'.
+    """
+
+    # Sinónimos aceptados desde el selector hacia el registry
+    _DOMAIN_SYNONYMS: Dict[str, str] = {
+        "finance": "financial",
+        "finanzas": "financial",
+        "legal": "legal",
+        "law": "legal",
+        "tech": "tech_review",
+        "technology": "tech_review",
+        "reviews": "reviews_and_opinions",
+        "opinions": "reviews_and_opinions",
+        "opinion": "reviews_and_opinions",
+        "geopolitics": "geopolitical",
+        "geo": "geopolitical",
+        "e-commerce": "ecommerce",
+        "generic": "generic",
+        "med": "medical",
+        "health": "medical",
+        "vet": "veterinary",
+        "veterinaria": "veterinary",
+    }
+
+    def __init__(self, registry: OntologyRegistry):
+        self.registry = registry
+        # índice por nombre canónico
+        self._by_name = {d.domain.lower(): d for d in registry.domains}
+
+    def normalize_domain(self, name: Optional[str]) -> Optional[str]:
+        if not name:
+            return None
+        key = name.strip().lower()
+        if key in self._by_name:
+            return key
+        if key in self._DOMAIN_SYNONYMS:
+            mapped = self._DOMAIN_SYNONYMS[key]
+            return mapped if mapped in self._by_name else None
+        # búsqueda por substring leve
+        for dom in self._by_name:
+            if key in dom or dom in key:
+                return dom
+        return None
+
+    def match_domains(self, names: List[str]) -> List[str]:
+        out = []
+        for n in names or []:
+            canon = self.normalize_domain(n)
+            if canon and canon not in out:
+                out.append(canon)
+        # Siempre incluir 'generic' al final
+        if "generic" not in out:
+            out.append("generic")
+        return out
+
+    def get(self, name: str) -> Optional[OntologyDomain]:
+        canon = self.normalize_domain(name)
+        return self._by_name.get(canon) if canon else None
+
+    def ensure_domains(self, preferred: List[str], extras: List[str] | None = None) -> List[OntologyDomain]:
+        """
+        Devuelve objetos dominio en orden: preferred (normalizados) + extras (si existen) + generic.
+        Sin duplicados.
+        """
+        order = self.match_domains(preferred or [])
+        if extras:
+            order += [d for d in self.match_domains(extras) if d not in order]
+        # materializa
+        uniq: List[OntologyDomain] = []
+        seen = set()
+        for dn in order:
+            d = self._by_name.get(dn)
+            if d and dn not in seen:
+                uniq.append(d); seen.add(dn)
+        return uniq
+
+    def prompt_blocks_for(self, domains: List[str], alias_limit: int = 15) -> str:
+        dd = self.ensure_domains(domains)
+        if not dd:
+            return "  • (sin dominios registrados en Registry)"
+        return "\n".join(d.to_prompt_block(alias_limit=alias_limit) for d in dd)
+
+    def allowed_domains(self, top_domains: List[str]) -> List[str]:
+        """Lista blanca para el post-proceso de menciones."""
+        return self.match_domains(top_domains)
+
+    def hint_map(self, top_domains: List[str], alias_limit: int = 40) -> Dict[str, List[str]]:
+        """Mapa dominio → pistas léxicas (para reetiquetar genéricas)."""
+        hints: Dict[str, List[str]] = {}
+        for d in self.ensure_domains(top_domains):
+            hints[d.domain] = [a for a in list(d.aliases)[:alias_limit] if a and len(a) >= 3]
+        return hints
 

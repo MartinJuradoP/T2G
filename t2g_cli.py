@@ -40,6 +40,12 @@ from chunker.schemas import ChunkingConfig
 from schema_selector.selector import select_schemas
 from schema_selector.registry import REGISTRY
 from schema_selector.schemas import SelectorConfig
+#Extracto LLM
+
+from mentions.llm_extractor import extract_mentions
+from mentions.schemas import MentionsConfig
+
+
 
 import warnings
 warnings.filterwarnings("ignore", category=FutureWarning, module="transformers")
@@ -210,6 +216,35 @@ def cmd_schema_select(args: argparse.Namespace) -> None:
         )
         logger.info("[SCHEMA-SELECT OK] %s → %s", ch_path, out_path)
 
+def cmd_mentions(args: argparse.Namespace) -> None:
+    import shutil
+    from mentions.llm_extractor import PROMPT_SAVE_DIR
+    # limpiar si se solicita
+    outdir = Path(getattr(args, "outdir", "outputs_mentions"))
+    if getattr(args, "clean_outdir", False) and outdir.exists():
+        for f in outdir.iterdir():
+            if f.is_file(): f.unlink()
+            else: import shutil; shutil.rmtree(f)
+    
+    # Limpieza adicional de prompts
+    prompt_dir = Path(PROMPT_SAVE_DIR)
+    if getattr(args, "clean_outdir", False) and prompt_dir.exists():
+        for f in prompt_dir.iterdir():
+            if f.is_file():
+                f.unlink()
+            else:
+                shutil.rmtree(f)
+        print(f"[MENTIONS CLEAN] Carpeta de prompts '{PROMPT_SAVE_DIR}' limpiada.")
+
+    cfg = MentionsConfig(
+        llm_model=getattr(args, "llm_model", "gpt-4o-mini"),
+        temperature=getattr(args, "temperature", 0.2),
+        max_tokens=getattr(args, "max_tokens", 4096),
+        confidence_threshold=getattr(args, "confidence_threshold", 0.25),
+        outdir=str(outdir),
+    )
+    extract_mentions(args.chunks_glob, args.schema_dir, cfg)
+
 # ============================================================================
 # Pipeline YAML
 # ============================================================================
@@ -316,6 +351,21 @@ def cmd_pipeline_yaml(args: argparse.Namespace) -> None:
             )
             cmd_schema_select(ns)
 
+        elif name == "mentions":
+            ns = argparse.Namespace(
+                chunks_glob=sargs.get("chunks_glob", "outputs_chunks/*.json"),
+                schema_dir=sargs.get("schema_dir", "outputs_schema"),
+                outdir=sargs.get("outdir", "outputs_mentions"),
+                llm_model=sargs.get("llm_model", "gpt-4o-mini"),
+                temperature=sargs.get("temperature", 0.2),
+                max_tokens=sargs.get("max_tokens", 4096),
+                confidence_threshold=sargs.get("confidence_threshold", 0.25),
+                clean_outdir=sargs.get("clean_outdir", False),
+            )
+            cmd_mentions(ns)
+
+
+
 
 
 # ============================================================================
@@ -420,6 +470,16 @@ def build_t2g_cli() -> argparse.ArgumentParser:
 
     ss.set_defaults(func=cmd_schema_select)
 
+    # mentions
+    mn = cmds.add_parser("mentions", help="Extrae entidades (LLM-only, schema-aware)")
+    mn.add_argument("--chunks-glob", default="outputs_chunks/*.json")
+    mn.add_argument("--schema-dir", default="outputs_schema")
+    mn.add_argument("--outdir", default="outputs_mentions")
+    mn.add_argument("--llm-model", default="gpt-4o-mini")
+    mn.add_argument("--temperature", type=float, default=0.2)
+    mn.add_argument("--max-tokens", type=int, default=4096)
+    mn.add_argument("--confidence-threshold", type=float, default=0.25)
+    mn.set_defaults(func=cmd_mentions)
 
 
     # pipeline-yaml

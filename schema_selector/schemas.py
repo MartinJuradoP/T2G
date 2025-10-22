@@ -40,7 +40,7 @@ class AttributeDef(BaseModel):
     @field_validator("type")
     @classmethod
     def _validate_type(cls, v: str) -> str:
-        allowed = {"string", "number", "date", "id", "code"}
+        allowed = {"string", "number", "date", "id", "code","list"}
         if v not in allowed:
             raise ValueError(f"Tipo inválido '{v}'. Debe ser uno de {allowed}")
         return v
