@@ -1,6 +1,23 @@
 # -*- coding: utf-8 -*-
 """
-llm_extractor.py — Mentions (enriquecido con schema + top_domains + registry)
+llm_extractor.py — Extracción de menciones con procesamiento por lotes de chunks (BatchChunk Mode)
+
+──────────────────────────────────────────────────────────────
+📘 Descripción
+──────────────────────────────────────────────────────────────
+Versión extendida del extractor de menciones para el pipeline T2G.
+
+Permite:
+  • Procesar los chunks de un documento en **lotes (batches)** de tamaño configurable.
+  • Mantener coherencia semántica inter-chunk sin saturar el contexto del modelo.
+  • Conservar trazabilidad completa por lote, por chunk y por documento.
+  • Unificar menciones y limpiar duplicados al final.
+
+──────────────────────────────────────────────────────────────
+⚙️ Parámetros clave
+──────────────────────────────────────────────────────────────
+  batch_size  → cantidad de chunks procesados juntos (por defecto: 3)
+  MENTIONS_DEBUG → guarda los prompts generados en outputs_prompts/
 """
 
 from __future__ import annotations
@@ -11,93 +28,29 @@ import re
 from pathlib import Path
 from typing import Dict, Any, List, Optional
 from dotenv import load_dotenv
-from openai import OpenAI
 
 from mentions.prompt_builder import build_prompt
 from schema_selector.registry import REGISTRY, RegistryHelper
 from mentions.schemas import MentionsConfig
 from mentions.utils import preserve_order
 from .metrics import attach_metrics_to_output
+from mentions.llm_client import get_client
 
+# ============================================================
+# ⚙️ Inicialización
+# ============================================================
+client, meta = get_client()
+print(f"[MENTIONS] Using provider={meta['provider']} | model={meta['model']}")
 
-# ------------------ Setup OpenAI ------------------
-load_dotenv()
-OPENAI_API_KEY = os.getenv("OPENAI_API_KEY")
-OPENAI_BASE_URL = os.getenv("OPENAI_BASE_URL", "https://api.openai.com/v1")
-client = OpenAI(api_key=OPENAI_API_KEY, base_url=OPENAI_BASE_URL)
-
-# Debug
 MENTIONS_DEBUG = os.getenv("MENTIONS_DEBUG", "0") == "1"
 PROMPT_SAVE_DIR = os.getenv("PROMPT_SAVE_DIR", "outputs_prompts")
+BATCH_SIZE = int(os.getenv("MENTIONS_BATCH_SIZE", "3"))  # 👈 configurable por entorno
 
-
-# ------------------ Helpers ------------------
-
-
-def _domain_hint_map(helper: RegistryHelper, top_domains: List[str], alias_limit: int = 40) -> Dict[str, List[str]]:
-    """Mapa dominio → pistas léxicas para reetiquetar genéricas."""
-    return helper.hint_map(top_domains, alias_limit=alias_limit)
-
-
-def _retag_generic_mentions(
-    mentions: List[Dict[str, Any]],
-    doc_text: str,
-    helper: RegistryHelper,
-    top_domains: List[str],
-    min_hits: int = 2
-) -> None:
-    """
-    Re-etiqueta menciones con domain='generic' si el contexto del span
-    contiene suficientes alias de un dominio top (señal ontológica).
-    """
-    if not mentions or not top_domains:
-        return
-
-    dhints = _domain_hint_map(helper, top_domains)
-    text_low = doc_text.lower() if isinstance(doc_text, str) else ""
-
-    for m in mentions:
-        if (m.get("domain") or "").lower() != "generic":
-            continue
-
-        # contexto local
-        sctx = (m.get("text") or "").lower()
-        if m.get("start_char") is not None and m.get("end_char") is not None and text_low:
-            s = max(0, int(m["start_char"]) - 50)
-            e = min(len(text_low), int(m["end_char"]) + 50)
-            sctx = text_low[s:e]
-
-        best_dom, best_hits = None, 0
-        for dom, aliases in dhints.items():
-            hits = sum(1 for a in aliases if a and a in sctx)
-            if hits > best_hits:
-                best_dom, best_hits = dom, hits
-
-        if best_dom and best_hits >= min_hits:
-            m["domain"] = best_dom
-            m["confidence"] = float(min(0.95, m.get("confidence", 0.7)))
-
-
-def _merge_overlapping_spans(mentions: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
-    """Limpia duplicados exactos por (text,type,domain)."""
-    seen = set()
-    out = []
-    for m in mentions:
-        key = (m.get("text", "").strip(), m.get("type", ""), m.get("domain", ""))
-        if key in seen:
-            continue
-        seen.add(key)
-        out.append(m)
-    return out
-
-
+# ============================================================
+# 🔧 Utilidades internas
+# ============================================================
 def _coerce_json_array(raw: str) -> List[dict]:
-    """
-    Intenta convertir el output del modelo a un JSON array:
-    - Recorta backticks.
-    - Extrae el primer bloque con apariencia de JSON array.
-    - Acepta {"mentions":[...]} como fallback.
-    """
+    """Normaliza salida LLM a JSON list válida."""
     s = (raw or "").strip()
     s = re.sub(r"^```(json)?\s*|\s*```$", "", s, flags=re.IGNORECASE).strip()
     m = re.search(r"\[[\s\S]*\]", s)
@@ -114,8 +67,30 @@ def _coerce_json_array(raw: str) -> List[dict]:
     return []
 
 
+def _merge_mentions(mentions: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
+    """Elimina duplicados exactos (text, type, domain) y promedia confianza."""
+    merged = {}
+    for m in mentions:
+        key = (m.get("text", "").strip().lower(), m.get("type", ""), m.get("domain", ""))
+        if key not in merged:
+            merged[key] = {**m, "source_chunk": [m.get("source_chunk", "UNK")], "_count": 1}
+        else:
+            merged[key]["_count"] += 1
+            merged[key]["confidence"] = round(
+                (merged[key]["confidence"] + m.get("confidence", 0.85)) / 2, 3
+            )
+            sc = m.get("source_chunk", "UNK")
+            if sc not in merged[key]["source_chunk"]:
+                merged[key]["source_chunk"].append(sc)
+
+    for m in merged.values():
+        m["source_chunk"] = ", ".join(m["source_chunk"])
+        m.pop("_count", None)
+    return list(merged.values())
+
+
 def _join_chunks_for_prompt(chunks: List[Dict[str, Any]]) -> str:
-    """Concatena chunks con su id para aportar contexto al LLM."""
+    """Concatena texto de varios chunks para formar el batch."""
     lines = []
     for c in chunks or []:
         t = (c.get("text") or "").strip()
@@ -126,9 +101,32 @@ def _join_chunks_for_prompt(chunks: List[Dict[str, Any]]) -> str:
     return "\n\n".join(lines)
 
 
-# ------------------ Main ------------------
+def _retag_generic_mentions(mentions: List[Dict[str, Any]], text: str, helper: RegistryHelper, top_domains: List[str]) -> None:
+    """Reetiqueta dominios genéricos según contexto local."""
+    dhints = helper.hint_map(top_domains, alias_limit=40)
+    text_low = text.lower()
+    for m in mentions:
+        if (m.get("domain") or "").lower() != "generic":
+            continue
+        sctx = m.get("text", "").lower()
+        s = max(0, m.get("start_char", 0) - 50)
+        e = min(len(text_low), m.get("end_char", 0) + 50)
+        sctx += " " + text_low[s:e]
+        best_dom, hits = None, 0
+        for d, aliases in dhints.items():
+            count = sum(1 for a in aliases if a in sctx)
+            if count > hits:
+                best_dom, hits = d, count
+        if best_dom and hits >= 2:
+            m["domain"] = best_dom
+            m["confidence"] = min(0.95, m.get("confidence", 0.8))
 
+
+# ============================================================
+# 🚀 FUNCIÓN PRINCIPAL — Extracción BatchChunk
+# ============================================================
 def extract_mentions(chunks_glob: str, schema_dir: str, cfg: MentionsConfig) -> None:
+    """Procesa cada documento por lotes de chunks y combina resultados."""
     outdir = Path(cfg.outdir)
     outdir.mkdir(parents=True, exist_ok=True)
 
@@ -143,145 +141,131 @@ def extract_mentions(chunks_glob: str, schema_dir: str, cfg: MentionsConfig) -> 
         try:
             chunk_data = json.loads(Path(ch_file).read_text(encoding="utf-8"))
             doc_id = chunk_data.get("doc_id", ch_file.stem)
+            chunks = chunk_data.get("chunks", [])
+            if not chunks:
+                print(f"[MENTIONS] ⚠️ Documento sin chunks: {doc_id}")
+                continue
 
-            # Carga selector output real si existe
+            # --- Cargar esquema del selector ---
             schema_path = Path(schema_dir) / f"{doc_id}_schema.json"
             if schema_path.exists():
                 schema_data = json.loads(schema_path.read_text(encoding="utf-8"))
             else:
                 schema_data = {"doc": {"selected_schema": "generic", "top_domains": ["generic"]}}
 
-            # Texto fuente (todos los chunks)
-            doc_text = _join_chunks_for_prompt(chunk_data.get("chunks", []))
-
-            # Guardrail: si lead != generic y selected_schema es genérico, forzar el del registry
-            doc_meta = schema_data.get("doc", {}) or {}
-            selected_schema = doc_meta.get("selected_schema") or "generic"
-            top_domains = (doc_meta.get("top_domains") or ["generic"])
+            doc_meta = schema_data.get("doc", {})
+            selected_schema = doc_meta.get("selected_schema", "generic")
+            top_domains = doc_meta.get("top_domains", ["generic"])
             lead = (top_domains[0] if top_domains else "generic").lower()
-            if lead != "generic" and selected_schema.startswith("generic"):
-                from schema_selector.selector import get_schema_for_domain
-                forced_schema = get_schema_for_domain(lead, REGISTRY)
-                schema_data.setdefault("doc", {})["selected_schema"] = forced_schema
-                print(f"[MENTIONS] Forzado selected_schema → {forced_schema} (lead={lead})")
 
-            # Prompt enriquecido con registry + schema + top_domains + texto
-            prompt = build_prompt(
-                schema_data=schema_data,
-                registry=REGISTRY,
-                helper=helper,
-                doc_text=doc_text,
-                alias_limit=15
-            )
-            if not isinstance(prompt, str):
-                prompt = "".join(prompt) if isinstance(prompt, (list, tuple)) else str(prompt)
-
-            # Dominios permitidos post-proceso
-            raw_allowed = ["generic"] + (top_domains or [])
-            allowed = preserve_order(raw_allowed)
+            allowed = preserve_order(["generic"] + top_domains)
             allowed = [helper.normalize_domain(d) or d for d in allowed]
-
-            #allowed = set(_allowed_domains(helper, top_domains))
-            
-
-
-            # --- DEBUG: dump prompt a disco para inspección ---
-            if MENTIONS_DEBUG:
-                os.makedirs(PROMPT_SAVE_DIR, exist_ok=True)
-                save_path = os.path.join(
-                    PROMPT_SAVE_DIR,
-                    f"{doc_id}_prompt_{datetime.datetime.now().strftime('%Y%m%d-%H%M%S')}.txt"
-                )
-                header = [
-                    f"[doc_id] {doc_id}",
-                    f"[selected_schema] {schema_data.get('doc',{}).get('selected_schema')}",
-                    f"[top_domains] {top_domains}",
-                    f"[allowed_domains] {allowed}",
-                    f"[text_len] {len(doc_text)}",
-                    "-" * 80,
-                ]
-                with open(save_path, "w", encoding="utf-8") as f:
-                    f.write("\n".join(header))
-                    f.write("\n")
-                    f.write(prompt)
-                print(f"[MENTIONS DEBUG] Prompt → {save_path}")
-                print(f"[MENTIONS DEBUG] Prompt(head): {prompt[:280].replace(chr(10),' ')} ...")
-
             print(f"[MENTIONS] Modelo {cfg.llm_model} | allowed_domains={allowed}")
 
-            # Llamada principal al modelo
-            response = client.responses.create(
-                model=cfg.llm_model,
-                input=[
-                    {"role": "system", "content": "Eres un analista experto en extracción semántica estructurada."},
-                    {"role": "user", "content": prompt},
-                ],
-                temperature=cfg.temperature,
-                max_output_tokens=cfg.max_tokens
-            )
-            raw = response.output_text.strip() if hasattr(response, "output_text") else ""
-            mentions = _coerce_json_array(raw)
+            # ======================================================
+            # 🔁 Procesamiento por lotes de chunks
+            # ======================================================
+            all_mentions: List[Dict[str, Any]] = []
+            total_batches = (len(chunks) + BATCH_SIZE - 1) // BATCH_SIZE
 
-            # ⚡ Fallback inferencial: si no devuelve nada, reintenta con instrucción reforzada
-            if not mentions and len(doc_text) > 50:
-                print(f"[MENTIONS] ⚠️ Sin menciones explícitas; reintentando en modo inferencial...")
-                prompt += (
-                    "\n\n⚡ No detectaste entidades. "
-                    "Ahora identifica las más probables (explícitas o implícitas) y devuélvelas "
-                    "en un JSON array de al menos 5 menciones tentativas con tipos, dominios y confianza estimada."
+            for i in range(0, len(chunks), BATCH_SIZE):
+                batch_chunks = chunks[i:i + BATCH_SIZE]
+                batch_text = _join_chunks_for_prompt(batch_chunks)
+                batch_id = i // BATCH_SIZE + 1
+
+                print(f"[MENTIONS] ▶ Procesando batch {batch_id}/{total_batches} "
+                      f"({len(batch_chunks)} chunks, {len(batch_text)} chars)")
+
+                prompt = build_prompt(
+                    schema_data=schema_data,
+                    registry=REGISTRY,
+                    helper=helper,
+                    doc_text=batch_text,
+                    alias_limit=12,
                 )
+
+                # Guardar prompt si debug activo
+                if MENTIONS_DEBUG:
+                    os.makedirs(PROMPT_SAVE_DIR, exist_ok=True)
+                    fname = f"{doc_id}_batch-{batch_id}_{datetime.datetime.now().strftime('%Y%m%d-%H%M%S')}.txt"
+                    Path(PROMPT_SAVE_DIR, fname).write_text(prompt, encoding="utf-8")
+                    print(f"[MENTIONS DEBUG] Prompt guardado: {fname}")
+
+                # --- Llamada al modelo ---
                 response = client.responses.create(
                     model=cfg.llm_model,
                     input=[
-                        {"role": "system", "content": "Eres un analista experto en extracción de entidades legales y relaciones contractuales."},
+                        {"role": "system", "content": "Eres un analista experto en extracción semántica estructurada."},
                         {"role": "user", "content": prompt},
                     ],
-                    temperature=cfg.temperature + 0.3,
-                    max_output_tokens=cfg.max_tokens
+                    temperature=cfg.temperature,
+                    max_output_tokens=cfg.max_tokens,
                 )
-                raw = response.output_text.strip() if hasattr(response, "output_text") else ""
-                mentions = _coerce_json_array(raw)
+                raw = getattr(response, "output_text", "").strip()
+                mentions_local = _coerce_json_array(raw)
 
-            # Filtro por confianza mínima
-            try:
-                thr = float(cfg.confidence_threshold)
-            except Exception:
-                thr = 0.25
-            mentions = [m for m in mentions if float(m.get("confidence", 1.0)) >= thr]
+                # --- Fallback ---
+                if not mentions_local:
+                    print(f"[MENTIONS] ⚠️ Sin menciones en batch {batch_id}, reintentando...")
+                    prompt += (
+                        "\n\n⚡ No detectaste entidades. "
+                        "Identifica las más probables (explícitas o implícitas) "
+                        "y devuélvelas en formato JSON (mínimo 5 menciones)."
+                    )
+                    response = client.responses.create(
+                        model=cfg.llm_model,
+                        input=[
+                            {"role": "system", "content": "Eres un analista experto en extracción semántica estructurada."},
+                            {"role": "user", "content": prompt},
+                        ],
+                        temperature=cfg.temperature + 0.3,
+                        max_output_tokens=cfg.max_tokens,
+                    )
+                    raw = getattr(response, "output_text", "").strip()
+                    mentions_local = _coerce_json_array(raw)
 
-            # Normaliza dominios a la lista permitida
-            for m in mentions:
-                d = (m.get("domain") or "generic").lower().strip()
-                m["domain"] = d if d in allowed else "generic"
+                # Normalizar y anotar procedencia
+                for m in mentions_local:
+                    m["source_chunk"] = ",".join([c.get("chunk_id", "UNK") for c in batch_chunks])
+                    m["domain"] = (m.get("domain") or "generic").lower()
+                    if m["domain"] not in allowed:
+                        m["domain"] = "generic"
+                    m["confidence"] = float(m.get("confidence", 0.85))
+                all_mentions.extend(mentions_local)
 
-            # Re-etiqueta 'generic' si hay evidencia local (ontológica)
-            _retag_generic_mentions(mentions, doc_text, helper, list(allowed))
+                print(f"[MENTIONS] ✅ Batch {batch_id} procesado ({len(mentions_local)} menciones)")
 
-            # Limpieza de duplicados
-            mentions = _merge_overlapping_spans(mentions)
+            # ======================================================
+            # 🧹 Consolidación global
+            # ======================================================
+            mentions = _merge_mentions(all_mentions)
+            joined_text = "\n".join(c.get("text", "") for c in chunks)
+            _retag_generic_mentions(mentions, joined_text, helper, allowed)
+            thr = float(cfg.confidence_threshold or 0.25)
+            mentions = [m for m in mentions if m.get("confidence", 1.0) >= thr]
 
-            # Empaqueta resultado
             result = {
                 "doc_id": doc_id,
                 "created_at": datetime.datetime.now().isoformat(),
                 "mentions": mentions,
                 "meta": {
-                    "provider": "openai",
+                    "provider": meta["provider"],
                     "model": cfg.llm_model,
-                    "schema_used": schema_data.get("doc", {}).get("selected_schema", "generic"),
-                    "domain_detected": (schema_data.get("doc", {}).get("top_domains") or ["generic"])[0],
+                    "schema_used": selected_schema,
+                    "domain_detected": lead,
+                    "batch_size": BATCH_SIZE,
+                    "batches_total": total_batches,
                     "confidence_threshold": thr,
                     "registry_version": "1.0.0",
-                }
+                },
             }
 
-            # Adjunta métricas (⚠️ debe devolver un dict)
             result = attach_metrics_to_output(result)
+            out_path = Path(cfg.outdir) / f"{doc_id}_mentions.json"
+            out_path.write_text(json.dumps(result, indent=2, ensure_ascii=False), encoding="utf-8")
 
-            out_file = outdir / f"{doc_id}_mentions.json"
-            out_file.write_text(json.dumps(result, indent=2, ensure_ascii=False), encoding="utf-8")
-
-            print(f"[MENTIONS OK] {doc_id} → {out_file}  (n={len(mentions)})")
+            print(f"[MENTIONS OK] {doc_id} → {out_path}  "
+                  f"(batches={total_batches} | menciones={len(mentions)})")
 
         except Exception as e:
             print(f"[MENTIONS ERROR] {ch_file.name}: {e}")

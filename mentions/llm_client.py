@@ -1,4 +1,7 @@
 # -*- coding: utf-8 -*-
+"""
+llm_client.py
+"""
 import os
 import time
 from typing import Optional, Dict, Any, List
@@ -8,6 +11,11 @@ import random
 
 # Carga .env en import
 load_dotenv(override=True)
+
+# Configuración determinista global
+TEMPERATURE = float(os.getenv("LLM_TEMPERATURE", 0))
+TOP_P = float(os.getenv("LLM_TOP_P", 0))
+SEED = int(os.getenv("LLM_SEED", 42))
 
 
 def get_client() -> tuple[Any, Dict[str, Any]]:
@@ -44,7 +52,13 @@ def get_client() -> tuple[Any, Dict[str, Any]]:
         raise RuntimeError("OPENAI_API_KEY no presente. Configura tu .env")
     client = OpenAI(api_key=api_key, base_url=base_url, organization=org_id)
     model = os.getenv("MENTIONS_LLM_MODEL", "gpt-4o-mini")
-    return client, {"provider": "openai", "model": model, "extra": {"base_url": base_url, "org": org_id}}
+    return client, {"provider": "openai","model": model,"extra": {
+        "base_url": base_url,
+        "org": org_id,
+        "temperature": TEMPERATURE,
+        "top_p": TOP_P,
+        "seed": SEED,}
+        }
 
 
 def with_backoff(fn, *, retries=5, base_delay=0.6, max_delay=8.0):

@@ -57,7 +57,7 @@ stages:
       clean_outdir: true
       ir_glob: "outputs_doc_topics/*.json"
       outdir: "outputs_chunks"
-      max_tokens: 2048
+      max_tokens: 1024
       min_chars: 280
       use_embeddings: true
       embedding_model: "all-MiniLM-L6-v2"
@@ -111,8 +111,8 @@ stages:
       disable_generic: false       # Si true, desactiva fallback genérico
 
       # --- Selección de dominios ---
-      topk_domains: 3              # Cuántos dominios devuelve a nivel doc
-      max_domains: 3               # Máximo de dominios evaluados
+      topk_domains: 2              # Cuántos dominios devuelve a nivel doc
+      max_domains: 2               # Máximo de dominios evaluados
 
       # 💡 Salida: JSON con distribución de scores por dominio
       # Este resultado alimentará futuras etapas (Mentions / Graph)

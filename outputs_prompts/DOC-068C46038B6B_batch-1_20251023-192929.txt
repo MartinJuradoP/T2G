@@ -1,0 +1,150 @@
+Eres un analista experto en extracción de entidades y relaciones.Con mucho conocimiento en la creación de Grafos de Conocimiento (Knowledge Graphs) y ontologías.
+
+El selector clasificó el documento con dominio principal **generic** 
+y los siguientes dominios complementarios (en orden de relevancia descendente): financial.
+Interpreta que el dominio principal aporta el contexto dominante,
+pero las entidades y relaciones pueden provenir de cualquiera de los dominios listados,
+sin excluir ninguno.
+
+Ontología combinada (Registry):
+- **GENERIC**:
+    • Entidades → Person, Organization, Date, DateExpression, Location, Amount, Currency, Identifier, ReferenceCode, DocumentID, AccountNumber, TransactionCode, Barcode, URL, EmailAddress, PhoneNumber, Address, IPAddress, SocialHandle, Hashtag, FileReference, Percentage, Measurement, Time, Duration, Sentiment, ActionVerb, Emoji
+    • Relaciones → mentions, links_to, refers_to, includes_emoji, has_contact, located_at
+    • Aliases → article, comentario, comment, content, documento, entry, file, general, mensaje, note, post, publicación
+- **FINANCIAL**:
+    • Entidades → Invoice, Transaction, Account, Stock, Ticker, Index, EarningsReport, Company, Executive, InvestmentRound, Partnership
+    • Relaciones → paid_by, covered_by, belongs_to_index, reports, reported, led_by, raised_in, partnered_with, invested_in, analyzed_by
+    • Aliases → acciones, acción, account, accounting, acquisition, balance sheet, banco, bank account, benchmark, beneficio, bolsa, bond
+
+Señales y pesos del selector:
+- Señales: keywords, embeddings, topics, context, prior
+- Pesos: {"alpha_kw": 0.2, "beta_emb": 0.4, "gamma_ctx": 0.2, "delta_top": 0.15, "epsilon_prior": 0.05}
+- Explicación: Dominio 'financial' seleccionado por calidad contextual (cohesión/salud/novelty/baja redundancia), similitud semántica (embeddings). (precisión_kw=0.00, recall_kw=0.00, label_emb=centroid) | Confianza baja: se prepara esquema genérico como respaldo.
+
+Instrucciones (modo enriquecido y jerárquico):
+
+1) Extrae todas las entidades y relaciones **explícitas o semiexplícitas** que aparezcan en el texto 
+   y que correspondan a los tipos definidos en la ontología combinada (Registry) 
+   para los dominios activos listados arriba.
+   Considera semiexplícitas aquellas que se expresan mediante símbolos, unidades, nombres técnicos,
+   convenciones del dominio o abreviaturas. 
+   No inventes entidades nuevas, pero tampoco omitas las que estén presentes
+   de forma implícita en frases o contextos típicos del dominio.
+
+
+2) Usa los tipos de entidad y relación definidos en los dominios activos del Registry 
+   como **esquemas estructurales**, no como filtros de texto.
+   Considera que cada entidad está definida por su nombre, descripción y atributos.
+   Los aliases sirven solo como ejemplos léxicos, pero debes reconocer menciones que encajen
+   con el concepto y atributos descritos para ese tipo, aunque el texto use otras palabras.
+
+
+3) Los dominios activos (generic, financial) pueden coexistir y compartir tipos o relaciones. 
+   Usa las entidades y relaciones definidas en todos ellos, sin excluir ninguno. 
+   Clasifica cada mención en el dominio más coherente con su contexto semántico,
+   y usa el dominio principal **generic** únicamente como guía de desambiguación,
+   nunca como restricción.
+
+
+4 Usa activamente los aliases del Registry para identificar equivalencias:
+   - Fechas, valores, cantidades o porcentajes → tipos `Date`, `Amount`, `Percentage`, `Measurement`.
+   - Símbolos bursátiles o índices (p. ej., "^SPX", "S&P 500", "^DJI") → tipos `Ticker`, `Index`.
+   - Nombres de organizaciones o compañías (p. ej., "Southern Co.", "Zacks Investment Research") → tipos `Company`, `Organization`.
+   - Si hay productos, contratos o métricas, usa los tipos de sus dominios asociados (p. ej., `Product`, `Contract`, `Metric`).
+
+5 Si el texto expresa una relación semántica entre entidades (por ejemplo: “reportó ingresos de”, “pertenece a”, “anunció la compra de”),
+   crea un objeto adicional con `"type"` igual al nombre de la relación definida en el Registry 
+   (por ejemplo: `"reports"`, `"belongs_to_index"`, `"acquired"`) y el `"domain"` correspondiente.
+
+6 Cada mención debe tener evidencia textual directa. Incluye:
+   - `"start_char"` y `"end_char"` con posiciones aproximadas.
+   - `"source_chunk"` con el identificador del bloque en que aparece.
+   No incluyas inferencias sin texto o información externa.
+
+7 Evita duplicados triviales: si una mención aparece repetida con el mismo `text`, `type` y `domain`, conserva solo una.
+
+8 Devuelve **únicamente un JSON array válido**, con objetos que sigan esta estructura:
+   [
+     {"text":"...","type":"...","domain":"...","confidence":0.95,
+       "start_char":null,"end_char":null,"source_chunk":"..."}
+   ]
+   No incluyas comentarios, backticks, ni texto adicional fuera del JSON.
+   Si no hay menciones válidas, devuelve [].
+
+[
+  {
+    "text": "Entity A",
+    "type": "Organization",
+    "domain": "generic",
+    "confidence": 0.95,
+    "start_char": 10,
+    "end_char": 19,
+    "source_chunk": "CHUNK-001"
+  },
+  {
+    "text": "2024-05-10",
+    "type": "Date",
+    "domain": "generic",
+    "confidence": 0.93,
+    "start_char": 55,
+    "end_char": 65,
+    "source_chunk": "CHUNK-001"
+  },
+  {
+    "text": "$1,000,000",
+    "type": "Amount",
+    "domain": "financial",
+    "confidence": 0.92,
+    "start_char": 120,
+    "end_char": 130,
+    "source_chunk": "CHUNK-001"
+  },
+  {
+    "text": "ABC Index",
+    "type": "Index",
+    "domain": "financial",
+    "confidence": 0.90,
+    "start_char": 200,
+    "end_char": 209,
+    "source_chunk": "CHUNK-001"
+  },
+  {
+    "text": "XZY-100",
+    "type": "Ticker",
+    "domain": "financial",
+    "confidence": 0.88,
+    "start_char": 220,
+    "end_char": 227,
+    "source_chunk": "CHUNK-001"
+  },
+  {
+    "text": "Service Contract",
+    "type": "Contract",
+    "domain": "legal",
+    "confidence": 0.87,
+    "start_char": 310,
+    "end_char": 326,
+    "source_chunk": "CHUNK-001"
+  },
+  {
+    "text": "Product Model 5",
+    "type": "Product",
+    "domain": "tech_review",
+    "confidence": 0.86,
+    "start_char": 400,
+    "end_char": 414,
+    "source_chunk": "CHUNK-001"
+  },
+  {
+    "text": "Entity A reported earnings of $1,000,000",
+    "type": "reports",
+    "domain": "financial",
+    "confidence": 0.90,
+    "start_char": 450,
+    "end_char": 495,
+    "source_chunk": "CHUNK-001"
+  }
+]
+
+ Texto a analizar:
+[CHUNK DOC-068C_0000_DF4F099E31] Shirin Ghaffary and Rachel Metz Mon, October 6, 2025 at 5:58 PM CST 4 min read (Bloomberg) -- OpenAI is making it easier for ChatGPT users to connect with third-party apps within the chatbot to carry out tasks, the company’s latest bid to turn its flagship product into a key gateway for digital services. Most Read from Bloomberg In Chicago, a Soft Architecture Biennial for Hard Times • With Rental Registries, Cities Seek to Close Data Gap With Landlords • With the new option, unveiled Monday during OpenAI’s annual developers event, a ChatGPT user can ask to create a playlist for the weekend and the app will connect with Spotify to make suggestions. Alternatively, a user can look up a three-bedroom home in a specific neighborhood on Zillow, without leaving the ChatGPT app. Other apps, including Figma, Expedia and Booking.com, are also available. The feature, which OpenAI calls “talking to apps,” requires users to sign in to the apps the first time. “There’s an opportunity for builders to create entirely new applications that are even native to ChatGPT, and of course for services you love to be able to benefit there, too,” said Brad Lightcap, OpenAI’s chief operating officer, in an interview with Bloomberg TV on Monday. The event caps off a frenzied few weeks for the company. OpenAI completed a secondary share sale that propelled it to become the most valuable startup in the world. It introduced several notable features and products, including a social video app called Sora that quickly rose to the top of Apple Inc. ’s App Store. And it announced multiple large infrastructure deals with Nvidia Corp. , Advanced Micro Devices Inc. and others to support broader adoption of its technology. In a sign of OpenAI’s rising influence in the market, a long list of companies, event. “This is a strange new thing that started happening,” OpenAI Chief Executive Officer Sam Altman said in a press briefing when asked about the market moves. “We are trying to figure out how to adjust for this kind of world, but it’s weird. Jony Ive, the legendary designer of Apple products, also spoke at Monday’s event. Ive and Altman have said they would team up on a new AI hardware project — but details of the closely watched collaboration have been scarce so far. Ive said that his team had come up with about 15 to 20 “really compelling product ideas,” but narrowing down which ones to pursue has been a challenge. “It would be easy if we knew there were three good ones,” he said. “It’s just not like that. OpenAI now has more than 800 million weekly ChatGPT users, Altman said on Monday. The service’s rapid growth has helped bolster OpenAI’s revenue. In September, OpenAI Chief Financial Officer Sarah Friar said at a conference that OpenAI was on track to generate $13 billion in revenue this year, up from $4 billion in 2024. Still, the AI developer has remained unprofitable due to billions of dollars in annual computing and research costs, to say nothing of OpenAI’s recent spending spree on chips and data centers. “Obviously, one day we have to be very profitable and we’re confident and patient that we will get there,” Altman said. “But right now, we’re in a phase of investment and growth. To offset some of that heavy investment, OpenAI, like its peers, is working to appeal to businesses and developers. At Monday’s event, OpenAI also released software called AgentKit that is meant to help developers build and roll out so-called AI agents — generally, software that can carry out a series of tasks with little or no input from a human. Altman said a number of companies have already built agents with the tools, including Albertson’s, Box Inc. and Canva Inc. “Software used to take years or months to build,” he said. “It can take minutes now. On Monday, OpenAI also announced that it would ship smaller voice and image-generation models, optimized for quick results and lower costs. And it said that its foray into open models, where the parameters of the model are freely available, had generated 23 million downloads on the platform Hugging Face.

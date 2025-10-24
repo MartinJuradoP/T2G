@@ -138,7 +138,7 @@ class OntologyRegistry(_BaseOntologyRegistry):
 # ===========================================================================
 MEDICAL = OntologyDomain(
     domain="medical",
-    schema_name="medical_note_v1",
+    schema_name="medical",
     weight=0.95,
     aliases=[
         # ⚕️ Más específicos, menos genéricos
@@ -211,7 +211,7 @@ MEDICAL = OntologyDomain(
 # ===========================================================================
 LEGAL = OntologyDomain(
     domain="legal",
-    schema_name="legal_contract_v1",
+    schema_name="legal",
     weight=1.0,
     aliases=[
         "contrato", "cláusula", "firma", "notario", "juicio", "sentencia",
@@ -280,13 +280,13 @@ LEGAL = OntologyDomain(
 # ===========================================================================
 FINANCIAL = OntologyDomain(
     domain="financial",
-    schema_name="financial_unified_v1",
+    schema_name="financial",
     weight=1.0,
     aliases=[
         # ----------------------------
         # Conceptos generales de finanzas y economía
         # ----------------------------
-        "finanzas", "economía", "mercado", "bolsa", "cotización", "acción", "acciones",
+        "finanzas", "economía", "mercado", "bolsa", "cotización", "acción", "acciones","ticker","index"
         "capital", "inversión", "divisa", "interés", "seguro", "pago", "banco",
         "presupuesto", "loan", "credito", "interés compuesto", "policy", "póliza",
         "beneficio", "loss", "profit", "revenue", "ingresos", "gasto", "expense",
@@ -294,6 +294,9 @@ FINANCIAL = OntologyDomain(
         "finance", "accounting", "investment", "fund", "trading", "exchange",
         "foreign exchange", "FX", "hedge fund", "mutual fund", "ETF", "bond",
         "derivative", "futures", "options", "swap",
+        "stock", "ticker", "index", "indice", "benchmark",
+        "NASDAQ", "Dow Jones", "S&P 500", "SPX", "DJI", "NYSE",
+        "Russell 2000", "FTSE", "Nikkei", "IBEX", "Bovespa", "DAX", "CAC 40",
 
         # ----------------------------
         # Indicadores y métricas financieras
@@ -312,8 +315,7 @@ FINANCIAL = OntologyDomain(
         "stock", "ticker", "index", "indice", "benchmark",
         "NASDAQ", "Dow Jones", "S&P 500", "SPX", "DJI", "NYSE",
         "Russell 2000", "FTSE", "Nikkei", "IBEX", "Bovespa", "DAX", "CAC 40",
-        "Utilities", "Technology", "Energy", "Banking", "Insurance", "AI sector",
-
+        
         # ----------------------------
         # Documentos, operaciones y entidades financieras
         # ----------------------------
@@ -330,25 +332,7 @@ FINANCIAL = OntologyDomain(
         "merger", "acquisition", "deal", "partnership", "infrastructure deal",
         "private equity", "venture capital", "capital raise", "investor", "shareholder",
 
-        # ----------------------------
-        # Roles ejecutivos y jerarquías
-        # ----------------------------
-        "CEO", "CFO", "COO", "CTO", "executive", "founder", "chairman",
-        "board member", "investor", "analyst", "senior vice president",
-
-        # ----------------------------
-        # Eventos, conferencias y comunicados
-        # ----------------------------
-        "conference", "press briefing", "developer event", "announcement",
-        "launch", "earnings call", "update", "product release",
-        "share sale", "investor day", "analyst meeting", "annual report",
-
-        # ----------------------------
-        # Sectores e industrias relacionadas
-        # ----------------------------
-        "AI", "technology", "software", "hardware", "semiconductor", "chip",
-        "utilities", "energy", "banking", "insurance", "automotive", "retail",
-        "media", "telecom", "manufacturing", "infrastructure",
+             
     ],
     negative_aliases={"hospital", "doctor", "contract", "disease", "recipe"},
     stopwords={"monto", "total", "fecha", "número", "porcentaje"},
@@ -396,7 +380,7 @@ FINANCIAL = OntologyDomain(
         EntityTypeDef(
             name="Stock",
             description="Public company share traded on the market.",
-            aliases=["acción", "stock", "ticker", "equity"],
+            aliases=["acción", "stock", "equity"],
             attributes=[
                 AttributeDef(name="symbol", type="string"),
                 AttributeDef(name="price", type="number"),
@@ -410,7 +394,7 @@ FINANCIAL = OntologyDomain(
                 "Unique symbol used to identify a publicly traded stock or index on an exchange. "
                 "Includes both company tickers (e.g., AAPL, MSFT) and index symbols (e.g., ^SPX, ^DJI)."
             ),
-            aliases=["ticker", "símbolo", "stock symbol", "market symbol", "trading symbol"],
+            aliases=["ticker", "símbolo", "stock symbol", "market symbol", "trading symbol","^","ticker symbol"],
             attributes=[
                 AttributeDef(name="symbol", type="string"),
                 AttributeDef(name="exchange", type="string"),
@@ -423,7 +407,7 @@ FINANCIAL = OntologyDomain(
         EntityTypeDef(
             name="Index",
             description="Market index aggregating multiple stocks.",
-            aliases=["index", "indice", "benchmark", "SPX", "DJI", "NASDAQ"],
+            aliases=["index", "indice", "benchmark", "SPX", "DJI", "NASDAQ","Dow Jones","S&P 500"],
             attributes=[
                 AttributeDef(name="name", type="string"),
                 AttributeDef(name="change_percent", type="number"),
@@ -516,7 +500,7 @@ FINANCIAL = OntologyDomain(
 # ===========================================================================
 TECH = OntologyDomain(
     domain="tech_review",
-    schema_name="tech_review_v1",
+    schema_name="tech_review",
     weight=0.9,
     aliases=[
         "benchmark", "reseña", "modelo", "gpu", "cpu", "latencia", "precisión",
@@ -557,7 +541,7 @@ TECH = OntologyDomain(
 # ===========================================================================
 ECOMMERCE = OntologyDomain(
     domain="ecommerce",
-    schema_name="ecommerce_order_v1",
+    schema_name="ecommerce",
     weight=1.0,
     aliases=[
         "carrito", "pedido", "compra", "precio", "producto", "cliente",
@@ -607,7 +591,7 @@ ECOMMERCE = OntologyDomain(
 # ===========================================================================
 VETERINARY = OntologyDomain(
     domain="veterinary",
-    schema_name="veterinary_case_v1",
+    schema_name="veterinary",
     weight=0.9,
     aliases=[
         "animal", "mascota", "veterinario", "síntoma", "tratamiento",
@@ -649,7 +633,7 @@ VETERINARY = OntologyDomain(
 # ===========================================================================
 GEO = OntologyDomain(
     domain="geopolitical",
-    schema_name="geopolitical_event_v1",
+    schema_name="geopolitical",
     weight=0.8,
     aliases=[
         "país", "ciudad", "estado", "frontera", "conflicto", "tratado",
@@ -695,12 +679,12 @@ GEO = OntologyDomain(
 # ===========================================================================
 REVIEWS = OntologyDomain(
     domain="reviews_and_opinions",
-    schema_name="review_service_v3",
+    schema_name="reviews_and_opinions",
     weight=0.9,
     aliases=[
         # Estructura general de reseñas
         "review", "reseña", "comentario", "opinión", "feedback", "valoración",
-        "rating", "calificación", "testimonio", "experiencia",
+        "rating", "calificación", "testimonio", "experiencia","food","comida",
         # Polaridad positiva
         "good", "great", "excellent", "amazing", "fantastic", "wonderful",
         "awesome", "perfect", "delicious", "tasty", "friendly", "clean",

@@ -75,7 +75,7 @@ def build_prompt(
     registry: OntologyRegistry,
     helper: Optional[RegistryHelper] = None,
     doc_text: Optional[str] = None,
-    alias_limit: int = 15
+    alias_limit: int = 20
 ) -> str:
     """
     Construye un prompt contextual y aumentativo combinando:
@@ -91,15 +91,11 @@ def build_prompt(
 
     # 1) Determinar dominios activos (top_domains + schema_domain + generic)
     #Funcion para mantener el orden y eliminar duplicados
-    """def preserve_order(seq):
-      seen = set()
-      return [x for x in seq if not (x in seen or seen.add(x))]"""
+   
     
     top_domains_raw = doc.get("top_domains", []) or ["generic"]
     selected_schema = doc.get("selected_schema", "generic")
     schema_domain = _infer_schema_domain(selected_schema)
-    #domains_combined = list(set(top_domains_raw + ([schema_domain] if schema_domain else []) + ["generic"]))
-    #domains_combined = preserve_order(["generic"] + top_domains_raw + ([schema_domain] if schema_domain else []))
     domains_combined = preserve_order(
       ["generic"] + top_domains_raw + ([schema_domain] if schema_domain else [])
     )
@@ -133,65 +129,87 @@ def build_prompt(
     # 7) Ejemplo JSON (como string literal, SIN f-string, para evitar llaves interpretadas)
     example_json = """[
   {
-    "text": "Juan Pérez",
-    "type": "Person",
+    "text": "Entity A",
+    "type": "Organization",
     "domain": "generic",
-    "confidence": 0.92,
-    "start_char": 15,
-    "end_char": 25,
+    "confidence": 0.95,
+    "start_char": 10,
+    "end_char": 19,
     "source_chunk": "CHUNK-001"
   },
   {
-    "text": "Contrato de Servicios",
-    "type": "Contract",
-    "domain": "legal",
-    "confidence": 0.90,
-    "start_char": 60,
-    "end_char": 82,
+    "text": "2024-05-10",
+    "type": "Date",
+    "domain": "generic",
+    "confidence": 0.93,
+    "start_char": 55,
+    "end_char": 65,
     "source_chunk": "CHUNK-001"
   },
   {
-    "text": "Paracetamol",
-    "type": "Drug",
-    "domain": "medical",
-    "confidence": 0.87,
-    "start_char": 120,
-    "end_char": 131,
-    "source_chunk": "CHUNK-001"
-  },
-  {
-    "text": "México",
-    "type": "Location",
-    "domain": "geopolitical",
-    "confidence": 0.85,
-    "start_char": 240,
-    "end_char": 246,
-    "source_chunk": "CHUNK-001"
-  },
-  {
-    "text": "$2,500.00",
+    "text": "$1,000,000",
     "type": "Amount",
     "domain": "financial",
-    "confidence": 0.83,
-    "start_char": 300,
-    "end_char": 310,
+    "confidence": 0.92,
+    "start_char": 120,
+    "end_char": 130,
+    "source_chunk": "CHUNK-001"
+  },
+  {
+    "text": "ABC Index",
+    "type": "Index",
+    "domain": "financial",
+    "confidence": 0.90,
+    "start_char": 200,
+    "end_char": 209,
+    "source_chunk": "CHUNK-001"
+  },
+  {
+    "text": "XZY-100",
+    "type": "Ticker",
+    "domain": "financial",
+    "confidence": 0.88,
+    "start_char": 220,
+    "end_char": 227,
+    "source_chunk": "CHUNK-001"
+  },
+  {
+    "text": "Service Contract",
+    "type": "Contract",
+    "domain": "legal",
+    "confidence": 0.87,
+    "start_char": 310,
+    "end_char": 326,
+    "source_chunk": "CHUNK-001"
+  },
+  {
+    "text": "Product Model 5",
+    "type": "Product",
+    "domain": "tech_review",
+    "confidence": 0.86,
+    "start_char": 400,
+    "end_char": 414,
+    "source_chunk": "CHUNK-001"
+  },
+  {
+    "text": "Entity A reported earnings of $1,000,000",
+    "type": "reports",
+    "domain": "financial",
+    "confidence": 0.90,
+    "start_char": 450,
+    "end_char": 495,
     "source_chunk": "CHUNK-001"
   }
 ]"""
-
-
     # 8) Prompt final (se concatena el ejemplo JSON como literal; NO hay llaves sin escapar)
     header = f"""
 Eres un analista experto en extracción de entidades y relaciones.Con mucho conocimiento en la creación de Grafos de Conocimiento (Knowledge Graphs) y ontologías.
 
-El selector clasificó el documento con dominio líder **{lead_domain}**, 
-y también identificó o sugirió los dominios: {', '.join(top_domains)}.
-
-Esquemas activos:
-{schemas_list}
-
-Entidades detectadas por el selector (indicativas, no limitativas):
-{selector_entities_str}
+El selector clasificó el documento con dominio principal **{lead_domain}** 
+y los siguientes dominios complementarios (en orden de relevancia descendente): {', '.join(top_domains[1:])}.
+Interpreta que el dominio principal aporta el contexto dominante,
+pero las entidades y relaciones pueden provenir de cualquiera de los dominios listados,
+sin excluir ninguno.
 
 Ontología combinada (Registry):
 {ontology_block}
@@ -203,24 +221,53 @@ Señales y pesos del selector:
 
 Instrucciones (modo enriquecido y jerárquico):
 
-1) Analiza cuidadosamente el texto y **extrae todas las menciones de entidades, valores, conceptos o relaciones relevantes**, no omitas ninguna.
-   presentes o inferibles según el contexto. No te limites a un número fijo: devuelve tantas menciones como sean necesarias
-   para representar de forma completa la información semántica del fragmento.
-2) Usa los **tipos de entidad y relación coherentes con los dominios y esquemas listados arriba**.
-   El orden de los dominios refleja **prioridad contextual y jerarquía semántica**:
-   los primeros dominios tienen más peso para clasificar menciones ambiguas o de contexto compartido.
-3) Cuando un mismo tipo o entidad pueda pertenecer a varios dominios (por ejemplo, `Organization` en *legal* y *geopolitical*),
-   selecciona el dominio principal según el **orden jerárquico de los dominios activos**, pero conserva la riqueza contextual.
-   No excluyas dominios secundarios si aportan matices o subtipos complementarios.
-4) Si el texto no contiene entidades explícitas, **sugiere las más probables o implícitas** según los dominios y el esquema activo,
-   priorizando aquellas incluidas o relacionadas en la ontología del Registry.
-5) Si existen relaciones semánticas evidentes (por ejemplo, “A contrata a B”, “firma de convenio”, “pago de monto”),
-   inclúyelas como entidades de tipo `"Relation"` o `"Action"`, según su naturaleza y contexto de dominio.
-6) Si el fragmento no encaja claramente en ningún dominio o sugiere uno nuevo, usa `"domain": "generic"`,
-   pero evita degradar menciones de dominios conocidos si su contexto lo justifica.
-7) Devuelve **únicamente un JSON array válido** con todas las menciones detectadas o inferidas.
-   No incluyas comentarios, backticks, ni texto adicional fuera del JSON.
+1) Extrae todas las entidades y relaciones **explícitas o semiexplícitas** que aparezcan en el texto 
+   y que correspondan a los tipos definidos en la ontología combinada (Registry) 
+   para los dominios activos listados arriba.
+   Considera semiexplícitas aquellas que se expresan mediante símbolos, unidades, nombres técnicos,
+   convenciones del dominio o abreviaturas. 
+   No inventes entidades nuevas, pero tampoco omitas las que estén presentes
+   de forma implícita en frases o contextos típicos del dominio.
 
+
+2) Usa los tipos de entidad y relación definidos en los dominios activos del Registry 
+   como **esquemas estructurales**, no como filtros de texto.
+   Considera que cada entidad está definida por su nombre, descripción y atributos.
+   Los aliases sirven solo como ejemplos léxicos, pero debes reconocer menciones que encajen
+   con el concepto y atributos descritos para ese tipo, aunque el texto use otras palabras.
+
+
+3) Los dominios activos ({', '.join(top_domains)}) pueden coexistir y compartir tipos o relaciones. 
+   Usa las entidades y relaciones definidas en todos ellos, sin excluir ninguno. 
+   Clasifica cada mención en el dominio más coherente con su contexto semántico,
+   y usa el dominio principal **{lead_domain}** únicamente como guía de desambiguación,
+   nunca como restricción.
+
+
+4 Usa activamente los aliases del Registry para identificar equivalencias:
+   - Fechas, valores, cantidades o porcentajes → tipos `Date`, `Amount`, `Percentage`, `Measurement`.
+   - Símbolos bursátiles o índices (p. ej., "^SPX", "S&P 500", "^DJI") → tipos `Ticker`, `Index`.
+   - Nombres de organizaciones o compañías (p. ej., "Southern Co.", "Zacks Investment Research") → tipos `Company`, `Organization`.
+   - Si hay productos, contratos o métricas, usa los tipos de sus dominios asociados (p. ej., `Product`, `Contract`, `Metric`).
+
+5 Si el texto expresa una relación semántica entre entidades (por ejemplo: “reportó ingresos de”, “pertenece a”, “anunció la compra de”),
+   crea un objeto adicional con `"type"` igual al nombre de la relación definida en el Registry 
+   (por ejemplo: `"reports"`, `"belongs_to_index"`, `"acquired"`) y el `"domain"` correspondiente.
+
+6 Cada mención debe tener evidencia textual directa. Incluye:
+   - `"start_char"` y `"end_char"` con posiciones aproximadas.
+   - `"source_chunk"` con el identificador del bloque en que aparece.
+   No incluyas inferencias sin texto o información externa.
+
+7 Evita duplicados triviales: si una mención aparece repetida con el mismo `text`, `type` y `domain`, conserva solo una.
+
+8 Devuelve **únicamente un JSON array válido**, con objetos que sigan esta estructura:
+   [
+     {{"text":"...","type":"...","domain":"...","confidence":0.95,
+       "start_char":null,"end_char":null,"source_chunk":"..."}}
+   ]
+   No incluyas comentarios, backticks, ni texto adicional fuera del JSON.
+   Si no hay menciones válidas, devuelve [].
 """.strip()
 
     text_section = f"\n\n Texto a analizar:\n{safe_text}" if safe_text else ""
