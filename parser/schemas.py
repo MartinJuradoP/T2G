@@ -144,6 +144,8 @@ class TextBlock(BaseModel):
     ocr: Optional[OCRInfo] = None
     prov: Optional[Provenance] = None
     source_lines: Optional[List[int]] = None  # índices de líneas crudas fusionadas
+    class Config:
+        extra = "allow"
 
 class FigureBlock(BaseModel):
     """Bloque para figuras/imágenes con caption opcional."""

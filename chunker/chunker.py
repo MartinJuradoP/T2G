@@ -30,6 +30,8 @@ from pathlib import Path
 from typing import Dict, Any, List, Optional, Tuple, Set
 
 import numpy as np
+import unicodedata
+
 
 from .schemas import (
     Chunk, ChunkingConfig, DocumentChunks, ChunkSourceSpan,
@@ -148,15 +150,60 @@ def _is_heading(text: str, patterns: List[str]) -> bool:
 
 # ----------------------- Tokenización y similitudes léxicas -----------------------
 _STOP_ES: Set[str] = {
-    "el","la","los","las","un","una","unos","unas","de","del","al","a","y","o","u",
-    "en","con","por","para","que","se","su","sus","es","son","ser","como","más",
-    "no","si","sí","ya","lo","le","les","esto","esta","estas","estos","ese","esa",
-    "eso","esas","esos","muy","pero","también","entre","sobre","sin"
+    # Artículos y determinantes
+    "el","la","los","las","un","una","unos","unas","lo","al","del","este","esta","estos","estas",
+    "ese","esa","esos","esas","aquel","aquella","aquellos","aquellas","mi","mis","tu","tus",
+    "su","sus","nuestro","nuestra","nuestros","nuestras","vuestro","vuestra","vuestros","vuestras",
+
+    # Pronombres
+    "yo","tú","vos","usted","él","ella","ello","nosotros","nosotras","vosotros","vosotras",
+    "ustedes","ellos","ellas","me","te","se","nos","os","le","les","lo","la","los","las",
+
+    # Preposiciones y conjunciones
+    "a","ante","bajo","con","contra","de","desde","en","entre","hacia","hasta","para","por",
+    "según","sin","sobre","tras","y","o","u","ni","que","como","cuando","donde","mientras",
+    "aunque","pero","sino","si","sí","no","ya","también","además","sin","solo","solamente",
+    "inclusive","incluso","excepto","salvo","porque","pues","entonces","entretanto","sin embargo",
+    "por lo tanto","por eso","así","así que","por consiguiente","de modo que","de manera que",
+
+    # Verbos auxiliares y comunes
+    "ser","soy","eres","es","somos","son","fui","fue","eran","estoy","estás","está","están",
+    "estaba","estaban","estar","haber","hay","he","has","ha","han","había","habían","tener",
+    "tengo","tienes","tiene","tenemos","tienen","tuvo","tenía","puede","pueden","pudo","podía",
+    "debe","deben","deber","hacer","hace","hacen","hacía","han","ha","era","eran","fue","fueron",
+
+    # Otros conectores y adverbios comunes
+    "muy","más","menos","mucho","poco","tal","tales","cada","cual","cuales","quien","quienes",
+    "cuyo","cuya","cuyos","cuyas","algo","nada","todo","todos","todas","ninguno","ninguna",
+    "alguno","alguna","algunos","algunas","siempre","nunca","jamás","aquí","allí","ahí","allá",
+    "acá","donde","cuándo","cómo","por qué","porque","ya","aun","aunque","mismo","misma","mismos",
+    "mismas","casi","entonces","ahora","ayer","hoy","mañana","todavía","aún","antes","después",
+    "durante","siendo","dentro","fuera","ambos","ambas","etc","etcétera","según","caso"
 }
 _STOP_EN: Set[str] = {
-    "the","a","an","and","or","of","to","in","on","for","with","as","by","is","are",
-    "be","this","that","these","those","it","its","at","from","not","yes","no","very",
-    "but","also","between","about","without","into","than","more","most","less","least"
+    # Articles & pronouns
+    "the","a","an","this","that","these","those","it","its","they","them","their","theirs",
+    "he","she","his","her","hers","we","us","our","ours","you","your","yours","i","me","my","mine",
+
+    # Prepositions & conjunctions
+    "and","or","nor","but","yet","so","for","to","of","in","on","at","from","into","onto",
+    "by","with","about","against","between","among","through","during","before","after",
+    "above","below","over","under","without","within","beyond","than","as","like","because",
+    "since","until","while","although","though","unless","if","whether","then","therefore",
+    "thus","hence","whereas","when","where","who","whom","whose","which","what","why","how",
+
+    # Auxiliary & common verbs
+    "be","is","are","am","was","were","been","being","have","has","had","having","do","does",
+    "did","doing","can","could","should","would","may","might","must","shall","will",
+    "need","ought","used","use","get","got","getting","let","lets","made","make","makes",
+
+    # Adverbs & quantifiers
+    "very","more","most","less","least","much","many","some","any","none","all","both","each",
+    "either","neither","one","two","three","every","other","another","same","different",
+    "again","just","only","also","too","however","there","here","where","now","then","ever",
+    "never","always","yet","still","once","soon","later","already","even","almost","quite",
+    "rather","maybe","perhaps","maybe","really","such","else","own","elsewhere","further",
+    "whose","whatever","whichever","whenever","wherever","whomever"
 }
 
 def _stopwords(lang: Optional[str]) -> Set[str]:
@@ -167,10 +214,16 @@ def _stopwords(lang: Optional[str]) -> Set[str]:
         return _STOP_EN
     return _STOP_ES
 
+def _normalize_text(text: str) -> str:
+    """Normaliza texto: minúsculas, sin tildes, sin signos raros."""
+    text = text.lower()
+    text = unicodedata.normalize("NFKD", text)
+    text = "".join([c for c in text if not unicodedata.combining(c)])
+    return re.sub(r"[^a-z0-9áéíóúüñ\s]", " ", text)
+
 def _tokens(text: str, lang: Optional[str]) -> List[str]:
     """Tokeniza en minúsculas, filtra no alfanum y stopwords."""
-    text = (text or "").lower()
-    text = re.sub(r"[^0-9a-záéíóúüñ\s]", " ", text)
+    text = _normalize_text(text or "")
     toks = [t for t in text.split() if t.strip()]
     sw = _stopwords(lang)
     return [t for t in toks if t not in sw]

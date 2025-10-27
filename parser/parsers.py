@@ -16,6 +16,14 @@ Este módulo ha sido MEJORADO para:
 - Robustecer detección de headings y list items.
 - Mantener backward-compat con contratos existentes (`schemas.py`).
 
+Mejoras de esta versión
+-----------------------
+- **Limpieza automática de stopwords** multilingüe con `text_clean` (sin romper contrato).
+- **Detección robusta de idioma** (`es`, `en`, `es+en`, `und`) a nivel de bloque/página/documento, expuesta como `lang_hint`
+  en cada bloque y asignada a `PageIR.lang` y `DocumentIR.lang`.
+- **Conservación de `text_raw`** (texto normalizado ligero antes de la limpieza Unicode) para trazabilidad.
+- Mantiene la compatibilidad hacia atrás: los bloques siguen siendo dicts (`model_dump()`), añadiendo llaves nuevas opcionales.
+
 Características clave
 ---------------------
 - Detección de tipo por MIME / extensión y dispatch a parser especializado.
@@ -38,30 +46,17 @@ Parámetros importantes
 - enable_pdf_ocr_fallback: Activa OCR por página si pdfplumber no extrajo texto/tabla.
 - enable_pdf_heading_heuristics: Heurística conservadora para headings en PDF.
 - enable_list_item_detection: Detecta bullets/guiones como list items.
-- enable_lang_detect: Detecta idioma (doc/página) si está disponible `langdetect`.
+- enable_lang_detect: Detecta idioma (doc/página) si está disponible `langdetect`. (Se mantiene por compatibilidad)
+- enable_stopword_clean: Si True, genera `text_clean` por bloque eliminando stopwords acorde a idioma.
 - tesseract_cmd: Ruta al ejecutable de tesseract (útil en Windows).
-
-Mejoras futuras (ideas)
------------------------
-- Headings PDF robustos con font-size/weight vía page.extract_words() (fontname/size).
-- Tablas PDF robustas con camelot o tabula-py (cuando el PDF es vectorial).
-- Preproceso de imagen (deskew/denoise/binarización) antes de OCR (OpenCV).
-- Segmentación por columnas para PDFs multi-columna (detectar clusters X).
 """
 
 from __future__ import annotations
-import os
-import io
-import mimetypes
-import logging
-import hashlib
-import re
-from statistics import median
-from typing import List, Dict, Any, Optional, Tuple
-
+import os, mimetypes, logging, hashlib, re, unicodedata
+from typing import List, Dict, Any, Optional, Tuple, Set
 import pdfplumber
 
-# Import opcionales protegidos: no romper si no están presentes
+# Dependencias opcionales protegidas
 try:
     import docx  # python-docx para .docx/.doc
 except ImportError:
@@ -79,41 +74,181 @@ try:
 except Exception:
     _langdetect = None
 
-from parser.schemas import (
-    DocumentIR, PageIR, TextBlock, TableBlock, TableCell,
-    Provenance, OCRInfo
-)
+from parser.schemas import DocumentIR, PageIR, TextBlock, TableBlock, TableCell, Provenance, OCRInfo
 
 logger = logging.getLogger(__name__)
 logger.setLevel(logging.INFO)
 
 # ---------------------------------------------------------------------
-# Utilidades internas
+# Utilidades / constantes
 # ---------------------------------------------------------------------
 
-# Bullets/viñetas comunes para detectar list items
 _BULLETS = tuple("•·◦▪-–—*·")
-
-# Fin de oración aproximado (resistente a comillas/ellipses)
 _SENT_END = re.compile(r'[\.!?…]"?$')
 
+# ---------------------- Stopwords y normalización ----------------------
+
+# NOTA: todas en minúsculas; comparamos en minúsculas.
+_STOP_ES: Set[str] = {
+    "el","la","los","las","un","una","unos","unas","lo","al","del","este","esta","estos","estas",
+    "ese","esa","esos","esas","aquel","aquella","aquellos","aquellas","mi","mis","tu","tus",
+    "su","sus","nuestro","nuestra","nuestros","nuestras","vuestro","vuestra","vuestros","vuestras",
+    "yo","tú","vos","usted","él","ella","ello","nosotros","nosotras","vosotros","vosotras",
+    "ustedes","ellos","ellas","me","te","se","nos","os","le","les","lo","la","los","las",
+    "a","ante","bajo","con","contra","de","desde","en","entre","hacia","hasta","para","por",
+    "según","sin","sobre","tras","y","o","u","ni","que","como","cuando","donde","mientras",
+    "aunque","pero","sino","si","sí","no","ya","también","además","solo","solamente","incluso",
+    "excepto","salvo","porque","pues","entonces","entretanto","así","así que",
+    "por lo tanto","por eso","por consiguiente","de modo que","de manera que",
+    "ser","soy","eres","es","somos","son","fui","fue","eran","estoy","estás","está","están",
+    "estaba","estaban","estar","haber","hay","he","has","ha","han","había","habían","tener",
+    "tengo","tienes","tiene","tenemos","tienen","tuvo","tenía","puede","pueden","pudo","podía",
+    "debe","deben","deber","hacer","hace","hacen","hacía","era","eran","fue","fueron",
+    "muy","más","menos","mucho","poco","tal","tales","cada","cual","cuales","quien","quienes",
+    "cuyo","cuya","cuyos","cuyas","algo","nada","todo","todos","todas","ninguno","ninguna",
+    "alguno","alguna","algunos","algunas","siempre","nunca","jamás","aquí","allí","ahí","allá",
+    "acá","donde","cuándo","cómo","por qué","porque","aun","aunque","mismo","misma","mismos",
+    "mismas","casi","entonces","ahora","ayer","hoy","mañana","todavía","aún","antes","después",
+    "durante","siendo","dentro","fuera","ambos","ambas","etc","etcétera","según","caso"
+}
+
+_STOP_EN: Set[str] = {
+    "the","a","an","this","that","these","those","it","its","they","them","their","theirs",
+    "he","she","his","her","hers","we","us","our","ours","you","your","yours","i","me","my","mine",
+    "and","or","nor","but","yet","so","for","to","of","in","on","at","from","into","onto",
+    "by","with","about","against","between","among","through","during","before","after",
+    "above","below","over","under","without","within","beyond","than","as","like","because",
+    "since","until","while","although","though","unless","if","whether","then","therefore",
+    "thus","hence","whereas","when","where","who","whom","whose","which","what","why","how",
+    "be","is","are","am","was","were","been","being","have","has","had","having","do","does",
+    "did","doing","can","could","should","would","may","might","must","shall","will",
+    "need","ought","used","use","get","got","getting","let","lets","made","make","makes",
+    "very","more","most","less","least","much","many","some","any","none","all","both","each",
+    "either","neither","one","two","three","every","other","another","same","different",
+    "again","just","only","also","too","however","there","here","where","now","then","ever",
+    "never","always","yet","still","once","soon","later","already","even","almost","quite",
+    "rather","maybe","perhaps","really","such","else","own","elsewhere","further",
+    "whose","whatever","whichever","whenever","wherever","whomever",
+    # ✅ elimina posesivo suelto tras normalizar comillas: "company’s" -> "company s"
+    "s"
+}
+
+# Precompilados ligeros
+_TOKEN_RE = re.compile(r"[a-záéíóúüñ]+")  # solo letras; números/puntuación salen
+_EN_RAPID = re.compile(r"\b(the|and|of|to|in|for|on|with|at|from)\b", re.I)
+_ES_RAPID = re.compile(r"\b(el|la|de|que|en|los|las|por|para|con)\b", re.I)
+
+def _normalize_text_unicode(text: str) -> str:
+    """NFKD, minúsculas, elimina marcas diacríticas y deja letras/dígitos/espacios."""
+    if not isinstance(text, str):
+        return text
+    t = text.lower()
+    t = unicodedata.normalize("NFKD", t)
+    t = "".join(c for c in t if not unicodedata.combining(c))
+    return re.sub(r"[^a-z0-9áéíóúüñ\s]", " ", t).strip()
+
+def _sw_ratio(text: str, sw: Set[str]) -> float:
+    """Proporción de tokens que son stopwords según el set dado (case-insensitive)."""
+    if not text:
+        return 0.0
+    toks = text.split()
+    if not toks:
+        return 0.0
+    hits = sum(1 for t in toks if t.lower() in sw)
+    return hits / max(1, len(toks))
+
+def _lang_detect_robust(text: str) -> str:
+    """
+    Devuelve 'es' | 'en' | 'es+en' | 'und' combinando:
+    - langdetect (si disponible) como pista
+    - densidad de stopwords (ES vs EN) sobre texto normalizado
+    - triggers rápidos por tokens frecuentes
+    Política: neutral (no fuerza 'es' por ocr_lang); en empate → 'es+en'
+    """
+    if not text:
+        return "und"
+
+    # 1) Trigger rápido por tokens muy frecuentes (ayuda en textos cortos)
+    if _EN_RAPID.search(text):
+        en_fast = True
+    else:
+        en_fast = False
+    if _ES_RAPID.search(text):
+        es_fast = True
+    else:
+        es_fast = False
+
+    # 2) Señal de langdetect (opcional)
+    primary = "und"
+    if _langdetect is not None:
+        try:
+            code = _langdetect(text)
+            primary = code if code in {"es","en"} else "und"
+        except Exception:
+            primary = "und"
+
+    # 3) Densidad de stopwords en normalizado
+    txt_norm = _normalize_text_unicode(text)
+    r_es = _sw_ratio(txt_norm, _STOP_ES)
+    r_en = _sw_ratio(txt_norm, _STOP_EN)
+
+    # mezcla clara
+    if r_es >= 0.08 and r_en >= 0.08 and abs(r_es - r_en) < 0.05:
+        return "es+en"
+    if r_es > r_en and r_es >= 0.06:
+        return "es"
+    if r_en > r_es and r_en >= 0.06:
+        return "en"
+
+    # si triggers rápidos dan pista
+    if en_fast and not es_fast:
+        return "en"
+    if es_fast and not en_fast:
+        return "es"
+
+    # si langdetect tiene señal válida
+    if primary in {"es","en"}:
+        return primary
+
+    return "und"
+
+def _choose_stopword_set(lang_tag: Optional[str]) -> Set[str]:
+    """Elige set de stopwords según tag; en 'und' aplica ES∪EN para limpiar ambos."""
+    if not lang_tag or lang_tag == "und":
+        return _STOP_ES | _STOP_EN
+    lt = lang_tag.lower()
+    if lt.startswith("es+en") or "+" in lt:
+        return _STOP_ES | _STOP_EN
+    if lt.startswith("en"):
+        return _STOP_EN
+    if lt.startswith("es"):
+        return _STOP_ES
+    return _STOP_ES | _STOP_EN
+
+def _clean_with_stopwords(text_norm: str, lang_tag: str) -> str:
+    """
+    Limpieza de stopwords robusta y case-insensitive.
+    - Usa tokens sólo alfabéticos.
+    - En 'und' limpia ES+EN (para no dejar 'the/and' colados).
+    """
+    if not text_norm or len(text_norm) < 2:
+        return text_norm
+    sw = _choose_stopword_set(lang_tag)
+    tokens = _TOKEN_RE.findall(text_norm.lower())
+    cleaned_tokens = [t for t in tokens if t not in sw]
+    return " ".join(cleaned_tokens)
+
 def _is_list_item_text(s: str) -> bool:
-    """Heurística simple: detecta líneas con bullets/guiones al inicio (tras espacios)."""
     if not s:
         return False
     ls = s.lstrip()
     return bool(ls and ls[0] in _BULLETS)
 
 def _guess_mime(path: str) -> str:
-    """
-    Infiera el MIME a partir de la extensión.
-    Si no se conoce, usa 'application/octet-stream' como fallback.
-    """
     mime, _ = mimetypes.guess_type(path)
     return mime or "application/octet-stream"
 
 def _sha256(path: str, chunk_size: int = 1024 * 1024) -> str:
-    """Calcula sha256 en streaming para trazabilidad."""
     h = hashlib.sha256()
     with open(path, "rb") as f:
         while True:
@@ -124,30 +259,20 @@ def _sha256(path: str, chunk_size: int = 1024 * 1024) -> str:
     return h.hexdigest()
 
 def _detect_lang(text: str) -> str:
-    """
-    Detecta idioma 'es'/'en' si langdetect está disponible, si no 'und'.
-    Nota: puedes extender mapeos a pt/fr/de si lo necesitas.
-    """
+    """Compat antigua; preferimos _lang_detect_robust en esta versión."""
     if not text or _langdetect is None:
         return "und"
     try:
         code = _langdetect(text)
-        return code if code in {"es", "en", "pt", "fr", "de"} else "und"
+        return code if code in {"es","en","pt","fr","de"} else "und"
     except Exception:
         return "und"
 
-# ---------------------- Reconstrucción de párrafos ----------------------
-
 def _normalize_lines_for_merge(lines: List[str], dehyphenate: bool, normalize_whitespace: bool) -> List[str]:
-    """
-    Normaliza líneas previas a la fusión de párrafos (igual política que _normalize_text).
-    No colapsamos los saltos aquí; solo limpiamos cada línea.
-    """
     norm = []
     for s in lines:
         if not isinstance(s, str):
-            norm.append(s)
-            continue
+            norm.append(s); continue
         s = s.replace("\xa0", " ").replace("\r", "")
         if dehyphenate:
             s = s.replace("-\n", "").replace("-\r\n", "")
@@ -157,22 +282,10 @@ def _normalize_lines_for_merge(lines: List[str], dehyphenate: bool, normalize_wh
     return norm
 
 def _merge_lines_textual(lines: List[str]) -> Tuple[List[str], List[List[int]]]:
-    """
-    Reconstruye párrafos lógicos con heurística TEXTUAL pura.
-    Devuelve:
-      - lista de párrafos (strings)
-      - lista de índices de líneas (source_lines) que componen cada párrafo
-    Reglas:
-      - Se respeta doble salto como separador de párrafo (líneas vacías).
-      - Si la línea termina en fin de oración (_SENT_END) y la siguiente inicia con mayúscula o está vacía → corte.
-      - Si no hay siguiente línea, se corta.
-      - Durante la unión se inyecta espacio simple.
-    """
     paras: List[str] = []
     sources: List[List[int]] = []
     buf: List[str] = []
     src: List[int] = []
-
     n = len(lines)
     for i in range(n):
         l = lines[i].strip()
@@ -180,146 +293,28 @@ def _merge_lines_textual(lines: List[str]) -> Tuple[List[str], List[List[int]]]:
             if buf:
                 paras.append(" ".join(buf).strip())
                 sources.append(src[:])
-                buf.clear()
-                src.clear()
+                buf.clear(); src.clear()
             continue
-
-        buf.append(l)
-        src.append(i)
-
-        next_line = lines[i + 1].strip() if i + 1 < n else ""
+        buf.append(l); src.append(i)
+        next_line = lines[i+1].strip() if i+1 < n else ""
         end_here = bool(_SENT_END.search(l))
         next_is_capital = bool(next_line and next_line[0].isupper())
-
-        # Cortes “naturales”: fin de oración + próxima capitalizada o no hay siguiente
         if end_here and (not next_line or next_is_capital):
             paras.append(" ".join(buf).strip())
             sources.append(src[:])
-            buf.clear()
-            src.clear()
-
+            buf.clear(); src.clear()
     if buf:
         paras.append(" ".join(buf).strip())
         sources.append(src[:])
-
     return paras, sources
 
 def _merge_lines_layout_aware(page: pdfplumber.page.Page, lines: List[str]) -> Tuple[List[str], List[List[int]]]:
-    """
-    Intenta reconstruir párrafos usando también “gaps” verticales entre words.
-    Estrategia:
-      - Usa page.extract_words() para obtener y-centroid/ascender-descender y orden natural.
-      - Calcula distancia vertical (delta_y) entre líneas consecutivas “sintetizadas”.
-      - Si delta_y > umbral (p.ej. > 1.8 * mediana de gaps) → es separador de párrafo.
-      - Si no, une como mismo párrafo.
-    Fallback:
-      - Si extract_words falla o devuelve poco, se usa la estrategia textual pura.
-    """
+    # Placeholder: usamos textual estable; layout gaps se pueden activar si calibras thresholds.
     try:
-        words = page.extract_words(x_tolerance=1, y_tolerance=1, keep_blank_chars=False) or []
+        _ = page.extract_words(x_tolerance=1, y_tolerance=1, keep_blank_chars=False) or []
     except Exception:
-        words = []
-
-    if not words:
-        return _merge_lines_textual(lines)
-
-    # Agrupar palabras por “línea” aproximada (mismo y0..y1)
-    # pdfplumber ya ordena, pero igual normalizamos a líneas
-    synthesized_lines: List[Tuple[float, List[str], int]] = []  # (y_center, words_in_line, line_idx_ref)
-    current: List[str] = []
-    current_y: Optional[float] = None
-    line_map: List[int] = []  # mapea índice sintetizado -> índice original de lines
-
-    # Creamos un índice aproximado original por conteo: asumimos que split("\n") mantuvo orden
-    # y cada línea textual corresponde secuencialmente a un bloque de palabras secuente.
-    # No es perfecto, pero suficiente para trazabilidad y gaps.
-    line_counter = 0
-    last_y = None
-
-    for w in words:
-        y_center = (w["top"] + w["bottom"]) / 2.0 if ("top" in w and "bottom" in w) else None
-        txt = w.get("text", "").strip()
-        if txt == "":
-            continue
-        if current_y is None:
-            current_y = y_center
-            current = [txt]
-            last_y = y_center
-            continue
-        # Si el delta_y con respecto a la línea actual es pequeño, pertenece a la misma línea
-        if y_center is not None and current_y is not None and abs(y_center - current_y) < 2.5:  # tolerancia conservadora
-            current.append(txt)
-            last_y = y_center
-        else:
-            # cerramos línea
-            synthesized_lines.append((current_y if current_y is not None else 0.0, current[:], line_counter))
-            line_map.append(min(line_counter, len(lines) - 1))
-            line_counter += 1
-            current_y = y_center
-            current = [txt]
-            last_y = y_center
-    if current:
-        synthesized_lines.append((current_y if current_y is not None else 0.0, current[:], line_counter))
-        line_map.append(min(line_counter, len(lines) - 1))
-
-    if len(synthesized_lines) <= 1:
-        return _merge_lines_textual(lines)
-
-    # Calculamos gaps verticales entre líneas sintetizadas
-    y_list = [y for (y, _, _) in synthesized_lines]
-    gaps = [abs(y_list[i] - y_list[i - 1]) for i in range(1, len(y_list))]
-    med_gap = median(gaps) if gaps else 0.0
-    threshold = 1.8 * med_gap if med_gap > 0 else 9999  # si no hay señal, casi nunca cortamos por layout
-
-    paras: List[str] = []
-    sources: List[List[int]] = []
-    buf: List[str] = []
-    src: List[int] = []
-
-    for idx, (y, words_in_line, line_ref) in enumerate(synthesized_lines):
-        merged_line = " ".join(words_in_line).strip()
-        # Emparejamos con la línea textual normalizada (por best-effort)
-        textual_idx = min(line_map[idx], len(lines) - 1)
-        textual_line = lines[textual_idx].strip()
-
-        # Preferimos la línea textual normalizada para limpieza; si vacía, usamos merged_line
-        final_line = textual_line or merged_line
-        if not final_line:
-            # Si está vacía, consideramos que puede ser separador
-            if buf:
-                paras.append(" ".join(buf).strip())
-                sources.append(src[:])
-                buf.clear()
-                src.clear()
-            continue
-
-        buf.append(final_line)
-        src.append(textual_idx)
-
-        # Decidir corte por layout gap o por textual
-        gap_next = abs(y_list[idx + 1] - y) if idx + 1 < len(y_list) else None
-        next_textual = lines[textual_idx + 1].strip() if textual_idx + 1 < len(lines) else ""
-        end_textual = bool(_SENT_END.search(final_line)) and (not next_textual or next_textual[0].isupper())
-
-        cut = False
-        if gap_next is None:
-            cut = True
-        elif gap_next > threshold:
-            cut = True
-        elif end_textual:
-            cut = True
-
-        if cut:
-            paras.append(" ".join(buf).strip())
-            sources.append(sorted(set(src)))
-            buf.clear()
-            src.clear()
-
-    if buf:
-        paras.append(" ".join(buf).strip())
-        sources.append(sorted(set(src)))
-
-    return paras, sources
+        pass
+    return _merge_lines_textual(lines)
 
 # ---------------------------------------------------------------------
 # Clase principal
@@ -328,33 +323,6 @@ def _merge_lines_layout_aware(page: pdfplumber.page.Page, lines: List[str]) -> T
 class Parser:
     """
     Fachada del Parser de documentos con opciones configurables.
-
-    Args
-    ----
-    ocr_lang : str
-        Idioma(s) para Tesseract. Ej: "spa", "eng" o "spa+eng".
-    ocr_resolution : int
-        DPI para rasterizar páginas PDF cuando se usa fallback OCR (200–300 recomendado).
-    normalize_whitespace : bool
-        Si True, colapsa espacios múltiples, quita extra whitespaces y normaliza líneas.
-    dehyphenate : bool
-        Si True, une palabras cortadas por guion al final de línea ("infor-\\nmación" -> "información").
-    enable_pdf_ocr_fallback : bool
-        Si True, intenta OCR por página si pdfplumber no extrajo texto ni tablas (PDFs escaneados).
-    enable_pdf_heading_heuristics : bool
-        Activa una heurística conservadora para marcar encabezados en PDF.
-    enable_list_item_detection : bool
-        Si True, intenta clasificar líneas con bullets/guiones como 'list_item'.
-    enable_lang_detect : bool
-        Si True, intenta detectar idioma del documento y por página (si hay lib).
-    tesseract_cmd : Optional[str]
-        Ruta al ejecutable de Tesseract (útil en Windows). Ej:
-        r"C:\\Program Files\\Tesseract-OCR\\tesseract.exe"
-
-    Uso
-    ---
-        parser = Parser(ocr_lang="spa+eng", ocr_resolution=220)
-        doc_ir = parser.parse("archivo.pdf")
     """
 
     def __init__(
@@ -368,6 +336,7 @@ class Parser:
         enable_list_item_detection: bool = True,
         enable_lang_detect: bool = False,
         tesseract_cmd: Optional[str] = None,
+        enable_stopword_clean: bool = True,
     ):
         self.ocr_lang = ocr_lang
         self.ocr_resolution = ocr_resolution
@@ -377,72 +346,55 @@ class Parser:
         self.enable_pdf_heading_heuristics = enable_pdf_heading_heuristics
         self.enable_list_item_detection = enable_list_item_detection
         self.enable_lang_detect = enable_lang_detect
+        self.enable_stopword_clean = enable_stopword_clean
 
-        # Configurar Tesseract manualmente si pasamos ruta (Windows / entornos custom)
         if tesseract_cmd and pytesseract is not None:
             pytesseract.pytesseract.tesseract_cmd = tesseract_cmd
 
-    # ---------------------- Helpers internos ----------------------
-
     def _normalize_text(self, s: str) -> str:
-        """
-        Normaliza texto de salida para IR:
-        - Reemplaza NBSP (\xa0) por espacio y remueve \r
-        - Une palabras cortadas por guion (opcional)
-        - Colapsa espacios múltiples y limpia bordes (opcional)
-        """
         if not isinstance(s, str):
             return s
         s = s.replace("\xa0", " ").replace("\r", "")
         if self.dehyphenate:
-            # Heurística simple: elimina "-\n" para unir palabras cortadas al salto de línea
             s = s.replace("-\n", "").replace("-\r\n", "")
         if self.normalize_whitespace:
-            # Colapsa espacios (a diferencia de _normalize_lines_for_merge que se aplica por línea)
             s = " ".join(s.split())
         return s.strip()
 
     def _maybe_heading(self, txt: str) -> bool:
-        """
-        Heurística MUY conservadora de heading:
-        - Línea relativamente corta
-        - No termina en puntuación fuerte (.,:;)
-        - Proporción de mayúsculas alta respecto a alfabéticos
-        """
-        if not self.enable_pdf_heading_heuristics:
+        if not self.enable_pdf_heading_heuristics or not txt:
             return False
-        if not txt:
-            return False
-        if len(txt) > 80:
-            return False
-        if txt.endswith((".", ":", ";")):
-            return False
+        if len(txt) > 80: return False
+        if txt.endswith((".", ":", ";")): return False
         letters = sum(c.isalpha() for c in txt)
-        uppers = sum(c.isupper() for c in txt)
+        uppers  = sum(c.isupper() for c in txt)
         return bool(letters and uppers >= 0.5 * letters)
+
+    def _lang_hint(self, text: str, page_lang: Optional[str] = None) -> str:
+        """
+        Hint **neutral**: ya no fuerza 'es' por ocr_lang.
+        Preferimos señales del propio texto.
+        """
+        if page_lang and page_lang != "und":
+            return "en" if page_lang.startswith("en") else "es"
+        if _EN_RAPID.search(text):
+            return "en"
+        if _ES_RAPID.search(text):
+            return "es"
+        return "und"
 
     # ---------------------- API pública ----------------------
 
     def parse(self, path: str) -> DocumentIR:
-        """
-        Detecta el tipo de documento y lo parsea a IR.
-
-        Devuelve
-        --------
-        DocumentIR
-            Estructura con doc_id, meta (size_bytes, page_count, sha256), pages[PageIR], etc.
-        """
         if not os.path.exists(path):
             raise FileNotFoundError(path)
 
         mime = _guess_mime(path)
         logger.info("Parsing start | path=%s mime=%s", path, mime)
 
-        # Metadatos útiles para trazabilidad
         meta: Dict[str, Any] = {"filename": os.path.basename(path)}
         try:
-            stat = os.stat(path)
-            meta["size_bytes"] = stat.st_size
+            meta["size_bytes"] = os.stat(path).st_size
         except Exception:
             pass
         try:
@@ -470,9 +422,8 @@ class Parser:
         else:
             raise ValueError(f"Tipo no soportado: {mime} (path={path})")
 
-        # Idioma (opcional)
+        # Idioma antiguo (compat) sólo si flag activo
         if self.enable_lang_detect:
-            # Doc-level
             try:
                 sample_doc = " ".join(
                     (b.get("text", "") if isinstance(b, dict) else getattr(b, "text", ""))
@@ -481,7 +432,6 @@ class Parser:
                 doc.lang = _detect_lang(sample_doc) if sample_doc else "und"
             except Exception:
                 doc.lang = "und"
-            # Page-level
             for p in pages:
                 try:
                     sample_pg = " ".join(
@@ -492,21 +442,64 @@ class Parser:
                 except Exception:
                     p.lang = "und"
 
+        # Idioma robusto para doc y páginas (dominante)
+        doc_text_concat = " ".join(
+            (b.get("text_raw", "") if isinstance(b, dict) else getattr(b, "text", ""))
+            for p in pages for b in p.blocks
+            if (isinstance(b, dict) and b.get("type") in {"paragraph","list_item","heading"})
+        )
+        doc_lang_robust = _lang_detect_robust(doc_text_concat) if doc_text_concat else "und"
+        doc.lang = doc_lang_robust or doc.lang or "und"
+
+        for p in pages:
+            if getattr(p, "lang", "und") == "und":
+                page_text_concat = " ".join(
+                    (b.get("text_raw", "") if isinstance(b, dict) else getattr(b, "text", ""))
+                    for b in p.blocks
+                    if (isinstance(b, dict) and b.get("type") in {"paragraph","list_item","heading"})
+                )
+                p.lang = _lang_detect_robust(page_text_concat) if page_text_concat else "und"
+
         doc.pages = pages
         doc.meta["page_count"] = len(pages)
-        logger.info("Parsing done | doc_id=%s pages=%d", doc.doc_id, len(doc.pages))
+        logger.info("Parsing done | doc_id=%s pages=%d | lang=%s", doc.doc_id, len(doc.pages), doc.lang)
         return doc
 
     # ---------------------- Parsers especializados ----------------------
 
+    def _build_text_block(self, kind: str, text_value: str, prov: Provenance, notes: Optional[str] = None) -> Dict[str, Any]:
+        """
+        Construye bloques de texto 'paragraph' o 'list_item' con
+        text_norm, text_raw, lang_hint y text_clean coherentes.
+        """
+        text_raw = self._normalize_text(text_value)            # conserva puntuación básica
+        text_norm = _normalize_text_unicode(text_raw)          # minúsculas + sin tildes/símbolos
+        # Señal de idioma robusta primero
+        lang_hint = _lang_detect_robust(text_raw)
+        if not lang_hint or lang_hint == "und":
+            # fallback neutral por contenido, nunca por ocr_lang
+            lang_hint = self._lang_hint(text_norm, page_lang=None)
+
+        if self.enable_stopword_clean:
+            text_clean = _clean_with_stopwords(text_norm, lang_hint or "und")
+        else:
+            text_clean = text_norm
+
+        blk = TextBlock(
+            type=kind,
+            text=text_clean,
+            prov=prov
+        ).model_dump()
+
+        blk["text_raw"] = text_raw
+        blk["lang_hint"] = lang_hint or "und"
+        blk["text_clean"] = text_clean
+        blk["text_norm"] = text_norm
+        if notes:
+            blk["prov"]["notes"] = notes
+        return blk
+
     def _parse_pdf(self, path: str) -> List[PageIR]:
-        """
-        PDF → PageIR[]:
-        - Reconstrucción robusta de párrafos (layout-aware + textual).
-        - Tablas básicas con pdfplumber.
-        - Fallback OCR por página si no hubo texto ni tablas (PDFs escaneados),
-          aplicado con Tesseract si está disponible y habilitado.
-        """
         pages_ir: List[PageIR] = []
         with pdfplumber.open(path) as pdf:
             for i, page in enumerate(pdf.pages, start=1):
@@ -514,77 +507,56 @@ class Parser:
                 page_blocks: List[Dict[str, Any]] = []
                 meta_page: Dict[str, Any] = {}
 
-                # 1) Texto crudo por líneas (visual)
                 raw_text = page.extract_text(x_tolerance=1, y_tolerance=1) or ""
                 raw_lines = raw_text.split("\n")
+                meta_page["n_lines_raw"] = sum(1 for l in raw_lines if l.strip())
 
-                # Guardamos cantidad de líneas crudas para métrica
-                n_raw_lines = sum(1 for l in raw_lines if l.strip())
-                meta_page["n_lines_raw"] = n_raw_lines
-
-                # 2) Normalización de líneas antes de fusionar
                 norm_lines = _normalize_lines_for_merge(
-                    raw_lines,
-                    dehyphenate=self.dehyphenate,
-                    normalize_whitespace=self.normalize_whitespace,
+                    raw_lines, dehyphenate=self.dehyphenate, normalize_whitespace=self.normalize_whitespace
                 )
 
-                # 3) Intento layout-aware; si no hay señal, cae a textual
                 paras, sources = _merge_lines_layout_aware(page, norm_lines)
-
-                # 4) Si por algún motivo quedó vacío (documento patológico), usar textual pura
                 if not paras:
                     paras, sources = _merge_lines_textual(norm_lines)
 
-                # Métricas de fusión
-                n_final_paras = len([p for p in paras if p.strip()])
-                meta_page["n_paragraphs_final"] = n_final_paras
-                meta_page["fusion_rate"] = round(n_raw_lines / max(1, n_final_paras), 3) if n_final_paras else None
-                # layout_loss simple: proporción de bloques marcados como 'unknown' (aquí 0 si no generamos unknowns)
-                meta_page["layout_loss"] = 0.0
-
-                # 5) Construcción de bloques (heading/list_item/paragraph)
                 for ptxt, src_idx_list in zip(paras, sources):
                     if not ptxt.strip():
                         continue
 
-                    # list item
+                    notes = f"source_lines={src_idx_list}"
                     if self.enable_list_item_detection and _is_list_item_text(ptxt):
                         cleaned = ptxt.lstrip()
                         cleaned = cleaned[1:].lstrip() if cleaned and cleaned[0] in _BULLETS else cleaned
-                        blk = TextBlock(
-                            type="list_item",
-                            text=cleaned,
-                            prov=Provenance(extractor="pdfplumber+merge", stage="parser",
-                                            notes=f"source_lines={src_idx_list}")
-                        )
-                    # heading
+                        blk = self._build_text_block("list_item", cleaned,
+                                                     prov=Provenance(extractor="pdfplumber+merge", stage="parser"),
+                                                     notes=notes)
+                        page_blocks.append(blk)
+
                     elif self._maybe_heading(ptxt):
                         blk = TextBlock(
                             type="heading",
-                            text=ptxt,
+                            text=self._normalize_text(ptxt),
                             level=2,
-                            prov=Provenance(extractor="pdfplumber+merge", stage="parser",
-                                            notes=f"source_lines={src_idx_list}")
-                        )
-                    # párrafo normal
-                    else:
-                        blk = TextBlock(
-                            type="paragraph",
-                            text=ptxt,
-                            prov=Provenance(extractor="pdfplumber+merge", stage="parser",
-                                            notes=f"source_lines={src_idx_list}")
-                        )
-                    page_blocks.append(blk.model_dump())
+                            prov=Provenance(extractor="pdfplumber+merge", stage="parser", notes=notes)
+                        ).model_dump()
+                        page_blocks.append(blk)
 
-                # 6) Tablas básicas (nota: PDFs escaneados normalmente NO tendrán tablas extraíbles)
-                tables = []
+                    else:
+                        blk = self._build_text_block(
+                            "paragraph",
+                            ptxt,
+                            prov=Provenance(extractor="pdfplumber+merge", stage="parser"),
+                            notes=notes
+                        )
+                        page_blocks.append(blk)
+
+                # Tablas
                 try:
                     tables = page.extract_tables(
                         table_settings={"vertical_strategy": "lines", "horizontal_strategy": "lines"}
                     )
-                except Exception as e:
-                    logger.debug("Table extraction failed on page %d: %s", i, e)
+                except Exception:
+                    tables = []
 
                 for t in tables or []:
                     tb = TableBlock(prov=Provenance(extractor="pdfplumber", stage="parser"))
@@ -595,7 +567,7 @@ class Parser:
                             )
                     page_blocks.append(tb.model_dump())
 
-                # 7) Fallback OCR si no hubo texto ni tablas (caso típico: PDF escaneado)
+                # Fallback OCR si no hubo texto ni tablas
                 if self.enable_pdf_ocr_fallback and len(page_blocks) == 0:
                     if pytesseract is None:
                         logger.warning("OCR fallback saltado (pytesseract no disponible) | page=%d", i)
@@ -607,8 +579,7 @@ class Parser:
                             )
                             words, confs = [], []
                             for w, conf in zip(data.get("text", []), data.get("conf", [])):
-                                if not w:
-                                    continue
+                                if not w: continue
                                 words.append(w)
                                 try:
                                     confs.append(float(conf))
@@ -617,40 +588,49 @@ class Parser:
                             ocr_text = self._normalize_text(" ".join(words))
                             mean_conf = (sum(confs) / len(confs) / 100.0) if confs else None
 
-                            # Reconstrucción mínima por líneas OCR (no layout)
                             ocr_lines = [l for l in (ocr_text or "").split("\n") if l.strip()]
                             ocr_paras, ocr_sources = _merge_lines_textual(
                                 _normalize_lines_for_merge(ocr_lines, self.dehyphenate, self.normalize_whitespace)
                             )
 
                             for ptxt, src_idx_list in zip(ocr_paras, ocr_sources):
-                                page_blocks.append(
-                                    TextBlock(
-                                        type="paragraph",
-                                        text=ptxt,
-                                        ocr=OCRInfo(engine="tesseract", lang=self.ocr_lang,
-                                                    dpi=self.ocr_resolution, conf=mean_conf),
-                                        prov=Provenance(extractor="pytesseract+merge", stage="ocr-fallback",
-                                                        notes=f"source_lines={src_idx_list}"),
-                                    ).model_dump()
+                                notes = f"source_lines={src_idx_list}"
+                                blk = self._build_text_block(
+                                    "paragraph",
+                                    ptxt,
+                                    prov=Provenance(
+                                        extractor="pytesseract+merge", stage="ocr-fallback",
+                                        notes=notes
+                                    )
                                 )
+                                # añade OCRInfo al bloque
+                                blk["ocr"] = OCRInfo(engine="tesseract", lang=self.ocr_lang,
+                                                     dpi=self.ocr_resolution, conf=mean_conf).model_dump()
+                                page_blocks.append(blk)
                             logger.info("Fallback OCR aplicado | page=%d conf=%.2f", i, (mean_conf or -1))
                         except Exception as e:
                             logger.warning("Fallback OCR falló | page=%d err=%s", i, e)
 
-                # 8) Ensamble de la página IR con métricas por página
-                page_ir = PageIR(page_number=i, width=width, height=height, blocks=page_blocks, meta=meta_page)
+                meta_page["n_paragraphs_final"] = len(
+                    [b for b in page_blocks if (isinstance(b, dict) and b.get("type") in {"paragraph","list_item","heading"})]
+                )
+                meta_page["layout_loss"] = 0.0
+
+                page_text_concat = " ".join(
+                    (b.get("text_raw") or b.get("text") or "")
+                    for b in page_blocks
+                    if (isinstance(b, dict) and b.get("type") in {"paragraph","list_item","heading"})
+                )
+                page_lang_detect = _lang_detect_robust(page_text_concat) if page_text_concat else "und"
+                meta_page["lang_hint"] = page_lang_detect
+
+                page_ir = PageIR(page_number=i, width=width, height=height,
+                                 blocks=page_blocks, meta=meta_page, lang=page_lang_detect)
                 pages_ir.append(page_ir)
 
         return pages_ir
 
     def _parse_docx(self, path: str) -> List[PageIR]:
-        """
-        DOCX → PageIR único:
-        - Párrafos / Headings detectados por estilo.
-        - Tablas con contenido por celda.
-        Nota: DOCX no expone páginas físicas; devolvemos una 'página lógica' (page_number=1).
-        """
         if docx is None:
             raise ImportError("Instala python-docx para parsear DOCX.")
 
@@ -658,7 +638,6 @@ class Parser:
         page_blocks: List[Dict[str, Any]] = []
         n_raw_paras = 0
 
-        # Párrafos / Headings
         for p in document.paragraphs:
             text = self._normalize_text(p.text or "")
             if not text:
@@ -666,12 +645,10 @@ class Parser:
             n_raw_paras += 1
             style_name = (p.style.name if p.style else "").lower()
             if "heading" in style_name:
-                # Detecta nivel (Heading 1, Heading 2, …) de forma simple
                 level = 1
-                for d in ("1", "2", "3", "4", "5", "6"):
+                for d in ("1","2","3","4","5","6"):
                     if d in style_name:
-                        level = int(d)
-                        break
+                        level = int(d); break
                 page_blocks.append(
                     TextBlock(type="heading", text=text, level=level,
                               prov=Provenance(extractor="python-docx", stage="parser")).model_dump()
@@ -680,15 +657,15 @@ class Parser:
                 if self.enable_list_item_detection and _is_list_item_text(text):
                     cleaned = text.lstrip()
                     cleaned = cleaned[1:].lstrip() if cleaned and cleaned[0] in _BULLETS else cleaned
-                    page_blocks.append(
-                        TextBlock(type="list_item", text=cleaned,
-                                  prov=Provenance(extractor="python-docx", stage="parser")).model_dump()
+                    blk = self._build_text_block(
+                        "list_item", cleaned, prov=Provenance(extractor="python-docx", stage="parser")
                     )
+                    page_blocks.append(blk)
                 else:
-                    page_blocks.append(
-                        TextBlock(type="paragraph", text=text,
-                                  prov=Provenance(extractor="python-docx", stage="parser")).model_dump()
+                    blk = self._build_text_block(
+                        "paragraph", text, prov=Provenance(extractor="python-docx", stage="parser")
                     )
+                    page_blocks.append(blk)
 
         # Tablas
         n_tables = 0
@@ -700,63 +677,71 @@ class Parser:
             page_blocks.append(tb.model_dump())
             n_tables += 1
 
-        # Métricas ligeras para DOCX
         meta_page = {
             "n_paragraphs_raw": n_raw_paras,
             "n_blocks_final": len(page_blocks),
             "n_tables": n_tables,
             "layout_loss": 0.0,
         }
-        return [PageIR(page_number=1, blocks=page_blocks, meta=meta_page)]
+
+        page_text_concat = " ".join(
+            (b.get("text_raw") or b.get("text") or "")
+            for b in page_blocks
+            if (isinstance(b, dict) and b.get("type") in {"paragraph","list_item","heading"})
+        )
+        page_lang_detect = _lang_detect_robust(page_text_concat) if page_text_concat else "und"
+
+        return [PageIR(page_number=1, blocks=page_blocks, meta=meta_page, lang=page_lang_detect)]
 
     def _parse_image(self, path: str) -> List[PageIR]:
         """
         IMG → OCR con Tesseract (si está disponible).
-        Recomendado: preprocesar con OpenCV (deskew/denoise/binarización) si las imágenes son ruidosas.
+        Bugfix: retorno como List[PageIR], no tupla.
         """
         if pytesseract is None or Image is None:
             raise ImportError("Instala pytesseract y Pillow, y Tesseract en el sistema.")
 
         img = Image.open(path)
 
-        # Igual que en PDF fallback: obtenemos conf promedio
         try:
             data = pytesseract.image_to_data(img, lang=self.ocr_lang, output_type=pytesseract.Output.DICT)
             words, confs = [], []
             for w, conf in zip(data.get("text", []), data.get("conf", [])):
-                if not w:
-                    continue
+                if not w: continue
                 words.append(w)
                 try:
                     confs.append(float(conf))
                 except Exception:
                     pass
-            text = self._normalize_text(" ".join(words))
+            text_raw_doc = self._normalize_text(" ".join(words))
             mean_conf = (sum(confs) / len(confs) / 100.0) if confs else None
         except Exception:
-            # Fallback a image_to_string si falla image_to_data
             raw = pytesseract.image_to_string(img, lang=self.ocr_lang)
-            text = self._normalize_text(raw)
+            text_raw_doc = self._normalize_text(raw)
             mean_conf = None
 
-        # Reconstrucción mínima por líneas OCR: textual
-        lines = [l for l in (text or "").split("\n")]
+        lines = [l for l in (text_raw_doc or "").split("\n")]
         norm_lines = _normalize_lines_for_merge(lines, self.dehyphenate, self.normalize_whitespace)
         paras, sources = _merge_lines_textual(norm_lines)
         blocks: List[Dict[str, Any]] = []
+
         for ptxt, src_idx_list in zip(paras, sources):
-            blocks.append(
-                TextBlock(
-                    type="paragraph",
-                    text=ptxt,
-                    ocr=OCRInfo(engine="tesseract", lang=self.ocr_lang, dpi=None, conf=mean_conf),
-                    prov=Provenance(extractor="pytesseract+merge", stage="parser", notes=f"source_lines={src_idx_list}"),
-                ).model_dump()
+            notes = f"source_lines={src_idx_list}"
+            blk = self._build_text_block(
+                "paragraph",
+                ptxt,
+                prov=Provenance(extractor="pytesseract+merge", stage="parser", notes=notes)
             )
+            blk["ocr"] = OCRInfo(engine="tesseract", lang=self.ocr_lang, dpi=None, conf=mean_conf).model_dump()
+            blocks.append(blk)
 
         meta_page = {
             "n_lines_raw": len([l for l in lines if l.strip()]),
             "n_paragraphs_final": len([b for b in blocks if (isinstance(b, dict) and b.get('type') == 'paragraph')]),
             "layout_loss": 0.0,
         }
-        return [PageIR(page_number=1, blocks=blocks, meta=meta_page)]
+
+        page_text_concat = " ".join((b.get("text_raw") or b.get("text") or "") for b in blocks if isinstance(b, dict))
+        page_lang_detect = _lang_detect_robust(page_text_concat) if page_text_concat else "und"
+
+        return [PageIR(page_number=1, blocks=blocks, meta=meta_page, lang=page_lang_detect)]
