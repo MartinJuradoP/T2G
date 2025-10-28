@@ -139,13 +139,37 @@ _EN_RAPID = re.compile(r"\b(the|and|of|to|in|for|on|with|at|from)\b", re.I)
 _ES_RAPID = re.compile(r"\b(el|la|de|que|en|los|las|por|para|con)\b", re.I)
 
 def _normalize_text_unicode(text: str) -> str:
-    """NFKD, minúsculas, elimina marcas diacríticas y deja letras/dígitos/espacios."""
+    """
+    Normalización adaptada a textos financieros:
+    - Minúsculas y sin tildes.
+    - Conserva símbolos financieros clave: %, $, €, £, +, -, /, ., ^.
+    - Preserva tickers e índices como ^SPX, AAPL.OQ, BTC/USD.
+    - Limpieza robusta, pero sin romper formatos numéricos.
+    """
     if not isinstance(text, str):
         return text
+
+    # 1. Minúsculas + quitar tildes y diacríticos
     t = text.lower()
     t = unicodedata.normalize("NFKD", t)
     t = "".join(c for c in t if not unicodedata.combining(c))
-    return re.sub(r"[^a-z0-9áéíóúüñ\s]", " ", t).strip()
+
+    # 2. Reemplaza caracteres no financieros ni alfanuméricos por espacio
+    # Permitimos: letras, dígitos, espacios y símbolos financieros relevantes
+    t = re.sub(r"[^a-z0-9\%\$\€\£\+\-\/\.\^\s]", " ", t)
+
+    # 3. Limpieza de espacios múltiples
+    t = re.sub(r"\s+", " ", t).strip()
+
+    # 4. Corrección de casos de tickers cortados o separados
+    t = re.sub(r"\^\s+([a-z0-9]+)", r"^\1", t)                # ^ spx → ^spx
+    t = re.sub(r"([a-z0-9])\s*\.\s*([a-z0-9])", r"\1.\2", t)  # AAPL . OQ → AAPL.OQ
+    t = re.sub(r"([a-z0-9])\s*\/\s*([a-z0-9])", r"\1/\2", t)  # BTC / USD → BTC/USD
+    t = re.sub(r"([\+\-])\s*([0-9])", r"\1\2", t)             # + 0.79% → +0.79%
+    t = re.sub(r"([0-9])\s*\%\b", r"\1%", t)                  # 5 % → 5%
+
+    return t
+
 
 def _sw_ratio(text: str, sw: Set[str]) -> float:
     """Proporción de tokens que son stopwords según el set dado (case-insensitive)."""

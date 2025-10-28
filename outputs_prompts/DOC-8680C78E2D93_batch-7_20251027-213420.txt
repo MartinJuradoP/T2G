@@ -1,0 +1,154 @@
+Eres un analista experto en extracción de entidades y relaciones.Con mucho conocimiento en la creación de Grafos de Conocimiento (Knowledge Graphs) y ontologías.
+
+El selector clasificó el documento con dominio principal **generic** 
+y los siguientes dominios complementarios (en orden de relevancia descendente): geopolitical, medical, legal, financial.
+Interpreta que el dominio principal aporta el contexto dominante,
+pero las entidades y relaciones pueden provenir de cualquiera de los dominios listados,
+sin excluir ninguno.
+
+Ontología combinada (Registry):
+- **GENERIC**:
+    • Entidades → Person, Organization, Date, DateExpression, Location, Country, Amount, Currency, Identifier, ReferenceCode, DocumentID, AccountNumber, TransactionCode, Barcode, URL, EmailAddress, PhoneNumber, Address, IPAddress, SocialHandle, Hashtag, FileReference, Percentage, Measurement, Time, Duration, Sentiment, ActionVerb, Emoji
+    • Aliases → article, comentario, comment, content, documento, entry, file, general, mensaje, note, post, publicación
+- **GEOPOLITICAL**:
+    • Entidades → Country, City, Event
+    • Aliases → agreement, alianza, border, city, ciudad, conflict, conflicto, country, estado, frontera, guerra, nación
+- **MEDICAL**:
+    • Entidades → Disease, Symptom, Drug, Patient
+    • Aliases → análisis clínico, cirugía, clinical trial, clínico, diagnosis, diagnóstico, doctor, drug, enfermedad, fármaco, historial médico, hospital
+- **LEGAL**:
+    • Entidades → Party, Contract, Representative, Obligation, Penalty
+    • Aliases → acuerdo, agreement, claim, clause, cláusula, compliance, contract, contrato, court, demanda, firma, juicio
+- **FINANCIAL**:
+    • Entidades → Invoice, Transaction, Account, Stock, Ticker, Index, EarningsReport, Company, Executive, InvestmentRound, Partnership
+    • Aliases → acciones, acción, account, accounting, acquisition, balance sheet, banco, bank account, benchmark, beneficio, bolsa, bond
+
+
+
+Instrucciones de extracción:
+
+1) Extrae todas las entidades y relaciones **explícitas o semiexplícitas** que aparezcan en el texto 
+   y que correspondan a los tipos definidos en la ontología combinada (Registry) 
+   para los dominios activos listados arriba.
+   Considera semiexplícitas aquellas que se expresan mediante símbolos, unidades, nombres técnicos,
+   convenciones del dominio o abreviaturas. 
+   No inventes entidades nuevas, pero tampoco omitas las que estén presentes
+   de forma implícita en frases o contextos típicos del dominio.
+
+
+2) Usa los tipos de entidad y relación definidos en los dominios activos del Registry 
+   como **esquemas estructurales**, no como filtros de texto.
+   Considera que cada entidad está definida por su nombre, descripción y atributos.
+   Los aliases sirven solo como ejemplos léxicos, pero debes reconocer menciones que encajen
+   con el concepto y atributos descritos para ese tipo, aunque el texto use otras palabras.
+
+
+3) Los dominios activos (generic, geopolitical, medical, legal, financial) pueden coexistir y compartir tipos o relaciones. 
+   Usa las entidades y relaciones definidas en todos ellos, sin excluir ninguno. 
+   Clasifica cada mención en el dominio más coherente con su contexto semántico,
+   y usa el dominio principal **generic** únicamente como guía de desambiguación,
+   nunca como restricción.
+
+
+4 Usa activamente los aliases del Registry para identificar equivalencias:
+   - Fechas, valores, cantidades o porcentajes → tipos `Date`, `Amount`, `Percentage`, `Measurement`.
+   - Símbolos bursátiles o índices (p. ej., "^SPX", "S&P 500", "^DJI") → tipos `Ticker`, `Index`.
+   - Nombres de organizaciones o compañías (p. ej., "Southern Co.", "Zacks Investment Research") → tipos `Company`, `Organization`.
+   - Si hay productos, contratos o métricas, usa los tipos de sus dominios asociados (p. ej., `Product`, `Contract`, `Metric`).
+
+5 Si el texto expresa una relación semántica entre entidades (por ejemplo: “reportó ingresos de”, “pertenece a”, “anunció la compra de”),
+   crea un objeto adicional con `"type"` igual al nombre de la relación definida en el Registry 
+   (por ejemplo: `"reports"`, `"belongs_to_index"`, `"acquired"`) y el `"domain"` correspondiente.
+
+6 Cada mención debe tener evidencia textual directa. Incluye:
+   - `"start_char"` y `"end_char"` con posiciones aproximadas.
+   - `"source_chunk"` con el identificador del bloque en que aparece.
+   No incluyas inferencias sin texto o información externa.
+
+7 Evita duplicados triviales: si una mención aparece repetida con el mismo `text`, `type` y `domain`, conserva solo una.
+
+8 Devuelve **únicamente un JSON array válido**, con objetos que sigan esta estructura:
+   [
+     {"text":"...","type":"...","domain":"...","confidence":0.95,
+       "start_char":null,"end_char":null,"source_chunk":"..."}
+   ]
+   No incluyas comentarios, backticks, ni texto adicional fuera del JSON.
+   Si no hay menciones válidas, devuelve [].
+
+[
+  {
+    "text": "Entity A",
+    "type": "Organization",
+    "domain": "generic",
+    "confidence": 0.95,
+    "start_char": 10,
+    "end_char": 19,
+    "source_chunk": "CHUNK-001"
+  },
+  {
+    "text": "2024-05-10",
+    "type": "Date",
+    "domain": "generic",
+    "confidence": 0.93,
+    "start_char": 55,
+    "end_char": 65,
+    "source_chunk": "CHUNK-001"
+  },
+  {
+    "text": "$1,000,000",
+    "type": "Amount",
+    "domain": "financial",
+    "confidence": 0.92,
+    "start_char": 120,
+    "end_char": 130,
+    "source_chunk": "CHUNK-001"
+  },
+  {
+    "text": "ABC Index",
+    "type": "Index",
+    "domain": "financial",
+    "confidence": 0.90,
+    "start_char": 200,
+    "end_char": 209,
+    "source_chunk": "CHUNK-001"
+  },
+  {
+    "text": "XZY-100",
+    "type": "Ticker",
+    "domain": "financial",
+    "confidence": 0.88,
+    "start_char": 220,
+    "end_char": 227,
+    "source_chunk": "CHUNK-001"
+  },
+  {
+    "text": "Service Contract",
+    "type": "Contract",
+    "domain": "legal",
+    "confidence": 0.87,
+    "start_char": 310,
+    "end_char": 326,
+    "source_chunk": "CHUNK-001"
+  },
+  {
+    "text": "Product Model 5",
+    "type": "Product",
+    "domain": "tech_review",
+    "confidence": 0.86,
+    "start_char": 400,
+    "end_char": 414,
+    "source_chunk": "CHUNK-001"
+  },
+  {
+    "text": "Entity A reported earnings of $1,000,000",
+    "type": "reports",
+    "domain": "financial",
+    "confidence": 0.90,
+    "start_char": 450,
+    "end_char": 495,
+    "source_chunk": "CHUNK-001"
+  }
+]
+
+ Texto a analizar:
+[CHUNK DOC-8680_0006_FA7ACB5321] released due efforts bishop henry whipple whig theory presidency lincoln adhered whig theory presidency focused executing laws deferring congress responsibility legislating lincoln vetoed four bills including wade davis bill harsh reconstruction program homestead act millions acres western government held land available purchase low cost morrill land grant colleges act provided government grants agricultural colleges state pacific railway acts granted federal support construction united states first transcontinental railroad completed passage homestead act pacific railway acts enabled absence southern congressmen senators opposed measures selection cabinet lincoln employed strengths opponents manner emboldened presidency lincoln commented thought process strongest men party cabinet needed hold people together looked party concluded strongest men no right deprive country services goodwin described group biography team rivals measures passed raise revenues federal government tariffs policy long precedent federal income tax lincoln signed second third morrill tariffs following first enacted buchanan signed revenue act creating first u income tax flat tax percent incomes revenue act adopted rates increased income lincoln administration presided expansion federal government economic influence areas national banking act created system national banks issued paper currency first time known greenbacks printed green reverse side congress created department agriculture response rumors renewed draft editors new york world journal commerce published false draft proclamation created opportunity editors others corner gold market lincoln attacked media behavior ordered military seizure papers lasted days lincoln largely responsible thanksgiving holiday thanksgiving become regional holiday new england th century sporadically proclaimed federal government irregular dates prior proclamation james madison presidency years earlier lincoln declared final thursday november year day thanksgiving june lincoln approved yosemite grant enacted congress provided unprecedented federal protection area known yosemite national park supreme court appointments lincoln philosophy court nominations cannot ask man answer despise him take man opinions known lincoln five appointments supreme court noah haynes swayne anti slavery lawyer committed union samuel freeman miller supported lincoln election avowed abolitionist david davis lincoln campaign manager served judge illinois court circuit lincoln practiced democrat stephen johnson field previous california supreme court justice provided geographic political balance finally lincoln treasury secretary salmon p chase became chief justice lincoln believed chase able jurist support reconstruction legislation appointment united republican party foreign policy lincoln named main political rival william h seward secretary state left diplomatic issues portfolio lincoln select top diplomats part patronage policy closely watched handling trent affair late sure no escalation war britain seward main role keep britain france supporting confederacy successful indicating britain france union declare war supported south assassination john wilkes booth well known actor confederate spy maryland joined confederate army contacts confederate secret service attending lincoln last public address april lincoln stated preference franchise conferred black men specifically intelligent serve cause soldiers booth hatched plot assassinate president booth learned lincolns intent attend play general grant planned assassinate lincoln grant ford theatre lincoln wife attended play american cousin evening april five days union victory battle appomattox courthouse last minute grant decided go new jersey visit children instead attending play april hours assassinated lincoln signed legislation establishing united states secret service evening booth entered back lincoln theater box crept up behind fired back lincoln head mortally wounding him lincoln guest major henry rathbone momentarily grappled booth booth stabbed him escaped attended doctor charles leale doctors lincoln taken across street petersen house remaining coma eight hours lincoln died morning april stanton saluted said belongs ages lincoln body placed flag wrapped coffin loaded hearse escorted white house union soldiers president johnson sworn day weeks booth refusing surrender tracked farm virginia mortally shot sergeant boston corbett died april secretary war stanton issued orders booth taken alive corbett initially arrested court martialed brief interview stanton declared him patriot dismissed charge funeral burial late president lay state first east room white house capitol rotunda april caskets containing lincoln body body son willie traveled weeks lincoln special funeral train train followed circuitous route washington d c springfield illinois stopping cities memorials attended hundreds thousands others gathered along tracks train passed bands bonfires hymn singing silent grief poet walt whitman composed lilacs last dooryard bloom d eulogize him four poems wrote lincoln african americans especially moved lost moses larger sense reaction response deaths men war historians emphasized widespread shock sorrow noted lincoln haters celebrated death lincoln body buried oak ridge cemetery springfield lies lincoln tomb religious philosophical beliefs young man lincoln religious skeptic deeply familiar bible quoting praising private position organized religion respected beliefs others clear profession christian beliefs throughout public career lincoln often quoted scripture famous speeches house divided speech gettysburg address second inaugural contain direct allusions providence quotes scripture lincoln subscribed doctrine necessity belief human mind controlled higher power death son edward frequently expressed dependence god joined church frequently attended first presbyterian church wife beginning lincoln asserted belief providence general way rarely language imagery evangelicals regarded republicanism founding fathers religious reverence death son willie february caused him look toward religion solace willie death questioned divine necessity war severity wrote time god saved destroyed union human contest contest began begun give final victory side day contest proceeds lincoln believe powerful god shaped events expressing belief major speeches end war increasingly appealed almighty solace explain events writing april newspaper editor kentucky spirituality best seen second inaugural address considered scholars greatest address american history lincoln himself greatest speech lincoln explains therein cause purpose result war god lincoln frequent religious imagery language toward end life reflected personal beliefs device reach audiences mostly evangelical protestants day lincoln assassinated reportedly told wife desired visit holy land health lincoln believed depression smallpox malaria took blue mass pills contained mercury treat constipation unknown extent resulted mercury poisoning several claims lincoln health declining assassination often based photographs lincoln appearing show weight loss muscle wasting suspected rare genetic disease marfan syndrome multiple endocrine neoplasia type b legacy republican values lincoln redefinition republican values stressed historians john patrick diggins harry v jaffa vernon burton eric foner herman j belz lincoln called declaration independence emphasized freedom equality sheet anchor republicanism beginning time constitution tolerated slavery focus political discourse diggins notes lincoln presented americans theory history offers profound contribution theory destiny republicanism itself cooper union speech instead focusing legality argument focused moral basis republicanism

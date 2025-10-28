@@ -7,6 +7,14 @@ Integra de forma aumentativa:
   2) Dominio implícito del selected_schema (p. ej. 'legal_contract_v1' → 'legal')
   3) Fallback genérico (siempre incluido)
   4) Ontología del Registry (entidades, relaciones, aliases)
+Esto se puede mejorar para un entrenamiento o inferencia más precisa y contextualizada.
+Ontología combinada (Registry):
+{ontology_block}
+
+Señales y pesos del selector:
+- Señales: {', '.join(signals) or 'no registradas'}
+- Pesos: {json.dumps(weights, ensure_ascii=False)}
+- Explicación: {explanation}
 """
 
 from __future__ import annotations
@@ -75,7 +83,7 @@ def build_prompt(
     registry: OntologyRegistry,
     helper: Optional[RegistryHelper] = None,
     doc_text: Optional[str] = None,
-    alias_limit: int = 20
+    alias_limit: int = 0
 ) -> str:
     """
     Construye un prompt contextual y aumentativo combinando:
@@ -108,7 +116,15 @@ def build_prompt(
     selector_ents = _selector_entities(schema_data)
 
     # 3) Bloques de ontología (aumentativos) sólo para dominios activos
-    ontology_block = helper.prompt_blocks_for(top_domains, alias_limit=alias_limit)
+    #ontology_block = helper.prompt_blocks_for(top_domains, alias_limit=alias_limit)
+    ontology_block = helper.prompt_blocks_for(
+    top_domains,
+    alias_limit=alias_limit,
+    include_entities=True,
+    include_relations=False,
+    include_aliases=True
+)
+
 
     # 4) Señales/explicación del selector (trazabilidad)
     signals = doc.get("signals_used", meta.get("signals", [])) or []
@@ -214,12 +230,9 @@ sin excluir ninguno.
 Ontología combinada (Registry):
 {ontology_block}
 
-Señales y pesos del selector:
-- Señales: {', '.join(signals) or 'no registradas'}
-- Pesos: {json.dumps(weights, ensure_ascii=False)}
-- Explicación: {explanation}
 
-Instrucciones (modo enriquecido y jerárquico):
+
+Instrucciones de extracción:
 
 1) Extrae todas las entidades y relaciones **explícitas o semiexplícitas** que aparezcan en el texto 
    y que correspondan a los tipos definidos en la ontología combinada (Registry) 

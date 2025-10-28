@@ -84,16 +84,48 @@ class OntologyDomain(_BaseOntologyDomain):
     def relation_names(self) -> List[str]:
         return [r.name for r in self.relation_types]
 
-    def to_prompt_block(self, alias_limit: int = 15) -> str:
-        ents = ", ".join(self.entity_names()) or "(sin entidades)"
-        rels = ", ".join(self.relation_names()) or "(sin relaciones)"
-        aliases = ", ".join(list(self.aliases)[:alias_limit]) or "(sin aliases)"
-        return (
-            f"- **{self.domain.upper()}**:\n"
-            f"    • Entidades → {ents}\n"
-            f"    • Relaciones → {rels}\n"
-            f"    • Aliases → {aliases}"
-        )
+    def to_prompt_block(
+        self,
+        alias_limit: int = 15,
+        include_entities: bool = True,
+        include_relations: bool = True,
+        include_aliases: bool = True
+    ) -> str:
+        """
+        Devuelve un bloque textual compacto para inyección en prompts.
+        Permite controlar si se incluyen entidades, relaciones y/o aliases.
+
+        Parámetros
+        ----------
+        alias_limit : int
+            Número máximo de aliases a mostrar por dominio.
+            Si es 0, no muestra ninguno.
+        include_entities : bool
+            Si False, omite la línea de entidades.
+        include_relations : bool
+            Si False, omite la línea de relaciones.
+        include_aliases : bool
+            Si False, omite completamente la línea de aliases.
+        """
+        lines = [f"- **{self.domain.upper()}**:"]
+
+        # 👇 Solo imprime si está habilitado
+        if include_entities:
+            ents = ", ".join(self.entity_names()) or "(sin entidades)"
+            lines.append(f"    • Entidades → {ents}")
+
+        if include_relations:
+            rels = ", ".join(self.relation_names()) or "(sin relaciones)"
+            lines.append(f"    • Relaciones → {rels}")
+
+        if include_aliases and alias_limit and alias_limit > 0 and self.aliases:
+            subset = list(self.aliases)[:alias_limit]
+            if subset:
+                aliases_str = ", ".join(subset)
+                lines.append(f"    • Aliases → {aliases_str}")
+
+        return "\n".join(lines)
+
 
 
 class OntologyRegistry(_BaseOntologyRegistry):
@@ -815,7 +847,15 @@ GENERIC = OntologyDomain(
         EntityTypeDef(
             name="Location",
             description="Lugar o referencia geográfica general.",
-            aliases=["ubicación", "ciudad", "país", "address", "lugar", "sitio"]
+            aliases=["ubicación", "ciudad", "address", "lugar", "sitio"]
+        ),
+        EntityTypeDef(
+            name="Country",
+            description="Nación, país o región.",
+            aliases=[
+                "país", "nación", "estado", "reino", "territorio", "China", "México", 
+                "Estados Unidos", "USA", "EE.UU.", "Francia", "Alemania", "Brasil", "Japón"
+            ]
         ),
         EntityTypeDef(
             name="Amount",
@@ -1113,11 +1153,33 @@ class RegistryHelper:
                 uniq.append(d); seen.add(dn)
         return uniq
 
-    def prompt_blocks_for(self, domains: List[str], alias_limit: int = 15) -> str:
+    def prompt_blocks_for(
+        self,
+        domains: List[str],
+        alias_limit: int = 15,
+        include_entities: bool = True,
+        include_relations: bool = True,
+        include_aliases: bool = True
+    ) -> str:
+        """
+        Construye bloques de texto para dominios activos.
+        Controla qué secciones se incluyen (entidades, relaciones, aliases).
+        """
         dd = self.ensure_domains(domains)
         if not dd:
             return "  • (sin dominios registrados en Registry)"
-        return "\n".join(d.to_prompt_block(alias_limit=alias_limit) for d in dd)
+
+        blocks = [
+            d.to_prompt_block(
+                alias_limit=alias_limit,
+                include_entities=include_entities,
+                include_relations=include_relations,
+                include_aliases=include_aliases,
+            )
+            for d in dd
+        ]
+        return "\n".join(blocks)
+
 
     def allowed_domains(self, top_domains: List[str]) -> List[str]:
         """Lista blanca para el post-proceso de menciones."""

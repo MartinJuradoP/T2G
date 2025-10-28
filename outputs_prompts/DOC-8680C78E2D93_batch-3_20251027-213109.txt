@@ -1,0 +1,154 @@
+Eres un analista experto en extracción de entidades y relaciones.Con mucho conocimiento en la creación de Grafos de Conocimiento (Knowledge Graphs) y ontologías.
+
+El selector clasificó el documento con dominio principal **generic** 
+y los siguientes dominios complementarios (en orden de relevancia descendente): geopolitical, medical, legal, financial.
+Interpreta que el dominio principal aporta el contexto dominante,
+pero las entidades y relaciones pueden provenir de cualquiera de los dominios listados,
+sin excluir ninguno.
+
+Ontología combinada (Registry):
+- **GENERIC**:
+    • Entidades → Person, Organization, Date, DateExpression, Location, Country, Amount, Currency, Identifier, ReferenceCode, DocumentID, AccountNumber, TransactionCode, Barcode, URL, EmailAddress, PhoneNumber, Address, IPAddress, SocialHandle, Hashtag, FileReference, Percentage, Measurement, Time, Duration, Sentiment, ActionVerb, Emoji
+    • Aliases → article, comentario, comment, content, documento, entry, file, general, mensaje, note, post, publicación
+- **GEOPOLITICAL**:
+    • Entidades → Country, City, Event
+    • Aliases → agreement, alianza, border, city, ciudad, conflict, conflicto, country, estado, frontera, guerra, nación
+- **MEDICAL**:
+    • Entidades → Disease, Symptom, Drug, Patient
+    • Aliases → análisis clínico, cirugía, clinical trial, clínico, diagnosis, diagnóstico, doctor, drug, enfermedad, fármaco, historial médico, hospital
+- **LEGAL**:
+    • Entidades → Party, Contract, Representative, Obligation, Penalty
+    • Aliases → acuerdo, agreement, claim, clause, cláusula, compliance, contract, contrato, court, demanda, firma, juicio
+- **FINANCIAL**:
+    • Entidades → Invoice, Transaction, Account, Stock, Ticker, Index, EarningsReport, Company, Executive, InvestmentRound, Partnership
+    • Aliases → acciones, acción, account, accounting, acquisition, balance sheet, banco, bank account, benchmark, beneficio, bolsa, bond
+
+
+
+Instrucciones de extracción:
+
+1) Extrae todas las entidades y relaciones **explícitas o semiexplícitas** que aparezcan en el texto 
+   y que correspondan a los tipos definidos en la ontología combinada (Registry) 
+   para los dominios activos listados arriba.
+   Considera semiexplícitas aquellas que se expresan mediante símbolos, unidades, nombres técnicos,
+   convenciones del dominio o abreviaturas. 
+   No inventes entidades nuevas, pero tampoco omitas las que estén presentes
+   de forma implícita en frases o contextos típicos del dominio.
+
+
+2) Usa los tipos de entidad y relación definidos en los dominios activos del Registry 
+   como **esquemas estructurales**, no como filtros de texto.
+   Considera que cada entidad está definida por su nombre, descripción y atributos.
+   Los aliases sirven solo como ejemplos léxicos, pero debes reconocer menciones que encajen
+   con el concepto y atributos descritos para ese tipo, aunque el texto use otras palabras.
+
+
+3) Los dominios activos (generic, geopolitical, medical, legal, financial) pueden coexistir y compartir tipos o relaciones. 
+   Usa las entidades y relaciones definidas en todos ellos, sin excluir ninguno. 
+   Clasifica cada mención en el dominio más coherente con su contexto semántico,
+   y usa el dominio principal **generic** únicamente como guía de desambiguación,
+   nunca como restricción.
+
+
+4 Usa activamente los aliases del Registry para identificar equivalencias:
+   - Fechas, valores, cantidades o porcentajes → tipos `Date`, `Amount`, `Percentage`, `Measurement`.
+   - Símbolos bursátiles o índices (p. ej., "^SPX", "S&P 500", "^DJI") → tipos `Ticker`, `Index`.
+   - Nombres de organizaciones o compañías (p. ej., "Southern Co.", "Zacks Investment Research") → tipos `Company`, `Organization`.
+   - Si hay productos, contratos o métricas, usa los tipos de sus dominios asociados (p. ej., `Product`, `Contract`, `Metric`).
+
+5 Si el texto expresa una relación semántica entre entidades (por ejemplo: “reportó ingresos de”, “pertenece a”, “anunció la compra de”),
+   crea un objeto adicional con `"type"` igual al nombre de la relación definida en el Registry 
+   (por ejemplo: `"reports"`, `"belongs_to_index"`, `"acquired"`) y el `"domain"` correspondiente.
+
+6 Cada mención debe tener evidencia textual directa. Incluye:
+   - `"start_char"` y `"end_char"` con posiciones aproximadas.
+   - `"source_chunk"` con el identificador del bloque en que aparece.
+   No incluyas inferencias sin texto o información externa.
+
+7 Evita duplicados triviales: si una mención aparece repetida con el mismo `text`, `type` y `domain`, conserva solo una.
+
+8 Devuelve **únicamente un JSON array válido**, con objetos que sigan esta estructura:
+   [
+     {"text":"...","type":"...","domain":"...","confidence":0.95,
+       "start_char":null,"end_char":null,"source_chunk":"..."}
+   ]
+   No incluyas comentarios, backticks, ni texto adicional fuera del JSON.
+   Si no hay menciones válidas, devuelve [].
+
+[
+  {
+    "text": "Entity A",
+    "type": "Organization",
+    "domain": "generic",
+    "confidence": 0.95,
+    "start_char": 10,
+    "end_char": 19,
+    "source_chunk": "CHUNK-001"
+  },
+  {
+    "text": "2024-05-10",
+    "type": "Date",
+    "domain": "generic",
+    "confidence": 0.93,
+    "start_char": 55,
+    "end_char": 65,
+    "source_chunk": "CHUNK-001"
+  },
+  {
+    "text": "$1,000,000",
+    "type": "Amount",
+    "domain": "financial",
+    "confidence": 0.92,
+    "start_char": 120,
+    "end_char": 130,
+    "source_chunk": "CHUNK-001"
+  },
+  {
+    "text": "ABC Index",
+    "type": "Index",
+    "domain": "financial",
+    "confidence": 0.90,
+    "start_char": 200,
+    "end_char": 209,
+    "source_chunk": "CHUNK-001"
+  },
+  {
+    "text": "XZY-100",
+    "type": "Ticker",
+    "domain": "financial",
+    "confidence": 0.88,
+    "start_char": 220,
+    "end_char": 227,
+    "source_chunk": "CHUNK-001"
+  },
+  {
+    "text": "Service Contract",
+    "type": "Contract",
+    "domain": "legal",
+    "confidence": 0.87,
+    "start_char": 310,
+    "end_char": 326,
+    "source_chunk": "CHUNK-001"
+  },
+  {
+    "text": "Product Model 5",
+    "type": "Product",
+    "domain": "tech_review",
+    "confidence": 0.86,
+    "start_char": 400,
+    "end_char": 414,
+    "source_chunk": "CHUNK-001"
+  },
+  {
+    "text": "Entity A reported earnings of $1,000,000",
+    "type": "reports",
+    "domain": "financial",
+    "confidence": 0.90,
+    "start_char": 450,
+    "end_char": 495,
+    "source_chunk": "CHUNK-001"
+  }
+]
+
+ Texto a analizar:
+[CHUNK DOC-8680_0002_A32BF8AFA2] nationally whigs irreparably split kansas nebraska act efforts compromise slavery issue reflecting demise party lincoln wrote think whig others say no whigs abolitionist no oppose extension slavery new republican party formed northern party dedicated antislavery drawing antislavery wing whig party combining free soil liberty antislavery democratic party members lincoln resisted early republican entreaties fearing new party become platform extreme abolitionists lincoln held out hope rejuvenating whigs lamented party growing closeness nativist know nothing movement lincoln elected illinois legislature declined take seat year elections showed strong opposition kansas nebraska act aftermath lincoln sought election united states senate time senators elected state legislature leading first six rounds voting unable obtain majority lincoln instructed backers vote lyman trumbull trumbull antislavery democrat received few votes earlier ballots supporters antislavery democrats vowed not support whig lincoln decision withdraw enabled whig supporters trumbull antislavery democrats combine defeat mainstream democratic candidate joel aldrich matteson campaign violent political confrontations kansas continued opposition kansas nebraska act remained strong throughout north elections approached lincoln joined republicans attended bloomington convention formally established illinois republican party convention platform endorsed congress right regulate slavery territories backed admission kansas free state lincoln gave final speech convention supporting party platform called preservation union june republican national convention lincoln received support run vice president john c fremont william dayton comprised ticket lincoln supported throughout illinois democrats nominated former secretary state james buchanan know nothings nominated former whig president millard fillmore buchanan prevailed republican william henry bissell won election governor illinois lincoln became leading republican illinois dred scott sandford dred scott slave master took him slave state territory free result missouri compromise scott returned slave state petitioned federal court freedom petition denied dred scott v sandford opinion supreme court chief justice roger b taney wrote black people not citizens derived no rights constitution missouri compromise unconstitutional infringing upon slave owners property rights democrats hoped dred scott end dispute slavery territories decision sparked outrage north lincoln denounced product conspiracy democrats support slave power argued decision variance declaration independence said founding fathers not believe men equal respect believed men equal certain inalienable rights life liberty pursuit happiness lincoln douglas debates cooper union speech douglas up re election u senate lincoln hoped defeat him party felt former whig nominated lincoln campaigning support trumbull earned him favor eastern republicans supported douglas opposition lecompton constitution admission kansas slave state illinois republicans resented eastern interference first time illinois republicans held convention agree upon senate candidate lincoln won nomination little opposition lincoln accepted nomination great enthusiasm zeal nomination delivered house divided speech biblical reference mark house divided itself cannot stand believe government cannot endure permanently half slave half free not expect union dissolved not expect house fall expect cease divided become thing speech created stark image danger disunion stage set election illinois legislature turn select lincoln douglas informed lincoln nomination douglas stated lincoln strong man party beat him victory hardly won senate campaign featured seven debates lincoln douglas famous political debates american history atmosphere akin prizefight drew crowds thousands principals stood stark contrast physically politically lincoln warned douglas slave power threatening values republicanism accused douglas distorting founding fathers premise men created equal douglas emphasized freeport doctrine said local settlers free choose allow slavery territory accused lincoln joined abolitionists lincoln argument assumed moral tone claimed douglas represented conspiracy promote slavery douglas argument legal nature claiming lincoln defying authority u supreme court exercised dred scott decision republican legislative candidates won popular votes democrats won seats legislature re elected douglas lincoln articulation issues given him national political presence lincoln purchased illinois staats anzeiger german language newspaper consistently supportive state german americans voted democrats german language paper mobilized republican support aftermath election newspapers frequently mentioned lincoln potential republican presidential candidate rivaled william h seward salmon p chase edward bates simon cameron lincoln popular midwest lacked support northeast unsure seek office january lincoln told group political allies accept presidential nomination offered following months several local papers endorsed candidacy coming months lincoln tireless making nearly fifty speeches along campaign trail quality simplicity rhetoric quickly became champion republican party despite overwhelming support midwestern united states appreciated east horace greeley editor new york tribune time wrote up unflattering account lincoln compromising position slavery reluctance challenge court dred scott ruling promptly him political rivals february powerful new york republicans invited lincoln give speech cooper union argued founding fathers united states little popular sovereignty repeatedly sought restrict slavery insisted morality required opposition slavery rejected groping middle ground right wrong audience thought appeared awkward ugly lincoln demonstrated intellectual leadership brought him contention journalist noah brooks reported no man impression first appeal new york audience historian david herbert donald described speech superb political move unannounced presidential aspirant appearing seward home state sponsored group largely loyal chase lincoln shrewdly no reference republican rivals nomination response inquiry ambitions lincoln said taste mouth little presidential election illinois republican state convention held decatur lincoln followers organized campaign team led david davis norman judd leonard swett jesse dubois lincoln received first endorsement exploiting embellished frontier legend clearing land splitting fence rails lincoln supporters adopted label rail candidate lincoln described himself height six feet four inches nearly lean flesh weighing average hundred eighty pounds dark complexion coarse black hair gray eyes michael martinez wrote effective imaging lincoln campaign times presented plain talking rail splitter times honest abe unpolished trustworthy republican national convention chicago lincoln won nomination third ballot beating candidates seward chase former democrat hannibal hamlin maine nominated vice president balance ticket lincoln success depended campaign team reputation moderate slavery issue strong support internal improvements tariff pennsylvania put him top led state iron interests reassured tariff support lincoln managers focused delegation honoring lincoln dictate no contracts bind slave power tightened grip national government republicans agreed lincoln north aggrieved party throughout lincoln doubted prospects civil war supporters rejected claims election incite secession douglas selected candidate northern democrats delegates eleven slave states walked out democratic convention opposed douglas position popular sovereignty

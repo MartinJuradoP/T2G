@@ -1,0 +1,154 @@
+Eres un analista experto en extracción de entidades y relaciones.Con mucho conocimiento en la creación de Grafos de Conocimiento (Knowledge Graphs) y ontologías.
+
+El selector clasificó el documento con dominio principal **generic** 
+y los siguientes dominios complementarios (en orden de relevancia descendente): geopolitical, medical, legal, financial.
+Interpreta que el dominio principal aporta el contexto dominante,
+pero las entidades y relaciones pueden provenir de cualquiera de los dominios listados,
+sin excluir ninguno.
+
+Ontología combinada (Registry):
+- **GENERIC**:
+    • Entidades → Person, Organization, Date, DateExpression, Location, Country, Amount, Currency, Identifier, ReferenceCode, DocumentID, AccountNumber, TransactionCode, Barcode, URL, EmailAddress, PhoneNumber, Address, IPAddress, SocialHandle, Hashtag, FileReference, Percentage, Measurement, Time, Duration, Sentiment, ActionVerb, Emoji
+    • Aliases → article, comentario, comment, content, documento, entry, file, general, mensaje, note, post, publicación
+- **GEOPOLITICAL**:
+    • Entidades → Country, City, Event
+    • Aliases → agreement, alianza, border, city, ciudad, conflict, conflicto, country, estado, frontera, guerra, nación
+- **MEDICAL**:
+    • Entidades → Disease, Symptom, Drug, Patient
+    • Aliases → análisis clínico, cirugía, clinical trial, clínico, diagnosis, diagnóstico, doctor, drug, enfermedad, fármaco, historial médico, hospital
+- **LEGAL**:
+    • Entidades → Party, Contract, Representative, Obligation, Penalty
+    • Aliases → acuerdo, agreement, claim, clause, cláusula, compliance, contract, contrato, court, demanda, firma, juicio
+- **FINANCIAL**:
+    • Entidades → Invoice, Transaction, Account, Stock, Ticker, Index, EarningsReport, Company, Executive, InvestmentRound, Partnership
+    • Aliases → acciones, acción, account, accounting, acquisition, balance sheet, banco, bank account, benchmark, beneficio, bolsa, bond
+
+
+
+Instrucciones de extracción:
+
+1) Extrae todas las entidades y relaciones **explícitas o semiexplícitas** que aparezcan en el texto 
+   y que correspondan a los tipos definidos en la ontología combinada (Registry) 
+   para los dominios activos listados arriba.
+   Considera semiexplícitas aquellas que se expresan mediante símbolos, unidades, nombres técnicos,
+   convenciones del dominio o abreviaturas. 
+   No inventes entidades nuevas, pero tampoco omitas las que estén presentes
+   de forma implícita en frases o contextos típicos del dominio.
+
+
+2) Usa los tipos de entidad y relación definidos en los dominios activos del Registry 
+   como **esquemas estructurales**, no como filtros de texto.
+   Considera que cada entidad está definida por su nombre, descripción y atributos.
+   Los aliases sirven solo como ejemplos léxicos, pero debes reconocer menciones que encajen
+   con el concepto y atributos descritos para ese tipo, aunque el texto use otras palabras.
+
+
+3) Los dominios activos (generic, geopolitical, medical, legal, financial) pueden coexistir y compartir tipos o relaciones. 
+   Usa las entidades y relaciones definidas en todos ellos, sin excluir ninguno. 
+   Clasifica cada mención en el dominio más coherente con su contexto semántico,
+   y usa el dominio principal **generic** únicamente como guía de desambiguación,
+   nunca como restricción.
+
+
+4 Usa activamente los aliases del Registry para identificar equivalencias:
+   - Fechas, valores, cantidades o porcentajes → tipos `Date`, `Amount`, `Percentage`, `Measurement`.
+   - Símbolos bursátiles o índices (p. ej., "^SPX", "S&P 500", "^DJI") → tipos `Ticker`, `Index`.
+   - Nombres de organizaciones o compañías (p. ej., "Southern Co.", "Zacks Investment Research") → tipos `Company`, `Organization`.
+   - Si hay productos, contratos o métricas, usa los tipos de sus dominios asociados (p. ej., `Product`, `Contract`, `Metric`).
+
+5 Si el texto expresa una relación semántica entre entidades (por ejemplo: “reportó ingresos de”, “pertenece a”, “anunció la compra de”),
+   crea un objeto adicional con `"type"` igual al nombre de la relación definida en el Registry 
+   (por ejemplo: `"reports"`, `"belongs_to_index"`, `"acquired"`) y el `"domain"` correspondiente.
+
+6 Cada mención debe tener evidencia textual directa. Incluye:
+   - `"start_char"` y `"end_char"` con posiciones aproximadas.
+   - `"source_chunk"` con el identificador del bloque en que aparece.
+   No incluyas inferencias sin texto o información externa.
+
+7 Evita duplicados triviales: si una mención aparece repetida con el mismo `text`, `type` y `domain`, conserva solo una.
+
+8 Devuelve **únicamente un JSON array válido**, con objetos que sigan esta estructura:
+   [
+     {"text":"...","type":"...","domain":"...","confidence":0.95,
+       "start_char":null,"end_char":null,"source_chunk":"..."}
+   ]
+   No incluyas comentarios, backticks, ni texto adicional fuera del JSON.
+   Si no hay menciones válidas, devuelve [].
+
+[
+  {
+    "text": "Entity A",
+    "type": "Organization",
+    "domain": "generic",
+    "confidence": 0.95,
+    "start_char": 10,
+    "end_char": 19,
+    "source_chunk": "CHUNK-001"
+  },
+  {
+    "text": "2024-05-10",
+    "type": "Date",
+    "domain": "generic",
+    "confidence": 0.93,
+    "start_char": 55,
+    "end_char": 65,
+    "source_chunk": "CHUNK-001"
+  },
+  {
+    "text": "$1,000,000",
+    "type": "Amount",
+    "domain": "financial",
+    "confidence": 0.92,
+    "start_char": 120,
+    "end_char": 130,
+    "source_chunk": "CHUNK-001"
+  },
+  {
+    "text": "ABC Index",
+    "type": "Index",
+    "domain": "financial",
+    "confidence": 0.90,
+    "start_char": 200,
+    "end_char": 209,
+    "source_chunk": "CHUNK-001"
+  },
+  {
+    "text": "XZY-100",
+    "type": "Ticker",
+    "domain": "financial",
+    "confidence": 0.88,
+    "start_char": 220,
+    "end_char": 227,
+    "source_chunk": "CHUNK-001"
+  },
+  {
+    "text": "Service Contract",
+    "type": "Contract",
+    "domain": "legal",
+    "confidence": 0.87,
+    "start_char": 310,
+    "end_char": 326,
+    "source_chunk": "CHUNK-001"
+  },
+  {
+    "text": "Product Model 5",
+    "type": "Product",
+    "domain": "tech_review",
+    "confidence": 0.86,
+    "start_char": 400,
+    "end_char": 414,
+    "source_chunk": "CHUNK-001"
+  },
+  {
+    "text": "Entity A reported earnings of $1,000,000",
+    "type": "reports",
+    "domain": "financial",
+    "confidence": 0.90,
+    "start_char": 450,
+    "end_char": 495,
+    "source_chunk": "CHUNK-001"
+  }
+]
+
+ Texto a analizar:
+[CHUNK DOC-8680_0000_BED88BD6AA] abraham lincoln february april american lawyer politician statesman served th president united states assassination lincoln led union american civil war defend nation constitutional union succeeded defeating insurgent confederacy abolishing slavery expanding power federal government modernizing u economy lincoln born poverty log cabin kentucky raised frontier primarily indiana self educated became lawyer whig party leader illinois state legislator u congressman illinois returned successful law practice springfield illinois angered kansas nebraska act opened territories slavery causing him re enter politics became leader new republican party reached national audience senate campaign debates stephen douglas lincoln ran president sweeping north gain victory pro slavery elements south viewed election threat slavery southern states began seceding nation time newly formed confederate states america began seizing federal military bases south little month lincoln assumed presidency confederate forces attacked fort sumter u fort south carolina following bombardment lincoln mobilized forces suppress rebellion restore union lincoln moderate republican navigate contentious array factions friends opponents democratic republican parties allies war democrats radical republicans demanded harsh treatment southern confederates managed factions exploiting mutual enmity carefully distributing political patronage appealing american people anti war democrats called copperheads despised lincoln irreconcilable pro confederate elements went far plot assassination gettysburg address came seen greatest influential statements american national purpose lincoln closely supervised strategy tactics war effort including selection generals implemented naval blockade south trade suspended habeas corpus maryland averted british intervention defusing trent affair issued emancipation proclamation declared slaves states rebellion free directed army navy recognize maintain freedom persons receive armed service united states lincoln pressured border states outlaw slavery promoted thirteenth amendment u constitution abolished slavery except punishment crime lincoln managed successful re election campaign sought heal war torn nation reconciliation april five days war end appomattox attending play ford theatre washington d c wife mary fatally shot confederate sympathizer john wilkes booth lincoln remembered martyr national hero wartime leadership efforts preserve union abolish slavery lincoln often ranked popular scholarly polls greatest president american history family childhood early life abraham lincoln born february second child thomas lincoln nancy hanks lincoln log cabin sinking spring farm near hodgenville kentucky descendant samuel lincoln englishman migrated hingham norfolk namesake hingham massachusetts family migrated west passing new jersey pennsylvania virginia lincoln descendant harrison family virginia paternal grandfather namesake captain abraham lincoln wife bathsheba nee herring moved family virginia jefferson county kentucky captain killed indian raid children including eight year old thomas abraham father witnessed attack thomas worked odd jobs kentucky tennessee family settled hardin county kentucky early lincoln mother nancy lincoln widely assumed daughter lucy hanks thomas nancy married june washington county moved elizabethtown kentucky children sarah abraham thomas died infant thomas lincoln bought leased farms kentucky losing land court disputes property titles family moved indiana land surveys titles reliable indiana free non slaveholding territory settled unbroken forest hurricane township perry county indiana lincoln noted family move indiana partly account slavery mainly due land title difficulties kentucky indiana thomas worked farmer cabinetmaker carpenter various times owned farms livestock town lots paid taxes sat juries appraised estates served county patrols thomas nancy members separate baptists church forbade alcohol dancing slavery overcoming financial challenges thomas obtained clear title indiana area became little pigeon creek community mother death october nancy lincoln died milk sickness leaving year old sarah charge household including father year old abraham nancy year old orphan cousin dennis hanks ten years january sarah died giving birth stillborn son devastating lincoln december thomas married sarah bush johnston widow elizabethtown kentucky children abraham became close stepmother called mother lincoln disliked hard labor associated farm life family said lazy reading scribbling writing ciphering writing poetry etc stepmother acknowledged not enjoy physical labor loved read education move illinois lincoln largely self educated formal schooling itinerant teachers included short stints kentucky learned read probably not write age seven indiana went school sporadically due farm chores total fewer months aggregate age persisted avid reader retained lifelong interest learning family neighbors schoolmates recalled reading included king james bible aesop fables john bunyan pilgrim progress daniel defoe robinson crusoe autobiography benjamin franklin despite self educated lincoln recipient honorary degrees life including honorary doctor laws columbia university june teen lincoln took responsibility chores customarily gave father earnings work outside home lincoln tall strong athletic became adept using ax active wrestler youth trained rough catch catch style known catch wrestling became county wrestling champion age gained reputation strength audacity winning wrestling match renowned leader ruffians known clary grove boys march fearing milk sickness outbreak several members extended lincoln family including abraham moved west illinois free state settled macon county abraham became increasingly distant thomas part due father lack education thomas family members prepared move new homestead coles county illinois abraham struck out home new salem illinois six years lincoln friends took goods including live hogs flatboat new orleans louisiana first witnessed slavery marriage children speculation persists lincoln first romantic interest ann rutledge met moved new salem witness testimony given decades afterward showed lack specific recollection romance rutledge died august likely typhoid fever saying not bear idea rain falling ann grave lincoln sunk serious episode depression gave rise speculation love early met mary owens kentucky late lincoln agreed match owens returned new salem owens arrived november courted time second thoughts august wrote owens letter saying not blame ended relationship replied lincoln met mary todd springfield illinois following year became engaged daughter robert smith todd wealthy lawyer businessman lexington kentucky wedding set january canceled lincoln request reconciled married november springfield mansion mary sister anxiously preparing nuptials asked going replied hell suppose couple bought house springfield near law office mary kept house help hired servant relative lincoln affectionate husband father four sons work regularly kept him away home oldest robert todd lincoln born child live maturity edward baker lincoln eddie born died february probably tuberculosis lincoln third son willie lincoln born december died fever white house february youngest thomas tad lincoln born april survived father died heart failure age july lincoln remarkably fond children lincolns not considered strict fact lincoln law partner william h herndon grow irritated lincoln brought children law office father seemed often absorbed work notice children behavior herndon recounted felt time wanted wring

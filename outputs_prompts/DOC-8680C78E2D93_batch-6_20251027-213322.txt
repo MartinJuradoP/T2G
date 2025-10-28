@@ -1,0 +1,154 @@
+Eres un analista experto en extracción de entidades y relaciones.Con mucho conocimiento en la creación de Grafos de Conocimiento (Knowledge Graphs) y ontologías.
+
+El selector clasificó el documento con dominio principal **generic** 
+y los siguientes dominios complementarios (en orden de relevancia descendente): geopolitical, medical, legal, financial.
+Interpreta que el dominio principal aporta el contexto dominante,
+pero las entidades y relaciones pueden provenir de cualquiera de los dominios listados,
+sin excluir ninguno.
+
+Ontología combinada (Registry):
+- **GENERIC**:
+    • Entidades → Person, Organization, Date, DateExpression, Location, Country, Amount, Currency, Identifier, ReferenceCode, DocumentID, AccountNumber, TransactionCode, Barcode, URL, EmailAddress, PhoneNumber, Address, IPAddress, SocialHandle, Hashtag, FileReference, Percentage, Measurement, Time, Duration, Sentiment, ActionVerb, Emoji
+    • Aliases → article, comentario, comment, content, documento, entry, file, general, mensaje, note, post, publicación
+- **GEOPOLITICAL**:
+    • Entidades → Country, City, Event
+    • Aliases → agreement, alianza, border, city, ciudad, conflict, conflicto, country, estado, frontera, guerra, nación
+- **MEDICAL**:
+    • Entidades → Disease, Symptom, Drug, Patient
+    • Aliases → análisis clínico, cirugía, clinical trial, clínico, diagnosis, diagnóstico, doctor, drug, enfermedad, fármaco, historial médico, hospital
+- **LEGAL**:
+    • Entidades → Party, Contract, Representative, Obligation, Penalty
+    • Aliases → acuerdo, agreement, claim, clause, cláusula, compliance, contract, contrato, court, demanda, firma, juicio
+- **FINANCIAL**:
+    • Entidades → Invoice, Transaction, Account, Stock, Ticker, Index, EarningsReport, Company, Executive, InvestmentRound, Partnership
+    • Aliases → acciones, acción, account, accounting, acquisition, balance sheet, banco, bank account, benchmark, beneficio, bolsa, bond
+
+
+
+Instrucciones de extracción:
+
+1) Extrae todas las entidades y relaciones **explícitas o semiexplícitas** que aparezcan en el texto 
+   y que correspondan a los tipos definidos en la ontología combinada (Registry) 
+   para los dominios activos listados arriba.
+   Considera semiexplícitas aquellas que se expresan mediante símbolos, unidades, nombres técnicos,
+   convenciones del dominio o abreviaturas. 
+   No inventes entidades nuevas, pero tampoco omitas las que estén presentes
+   de forma implícita en frases o contextos típicos del dominio.
+
+
+2) Usa los tipos de entidad y relación definidos en los dominios activos del Registry 
+   como **esquemas estructurales**, no como filtros de texto.
+   Considera que cada entidad está definida por su nombre, descripción y atributos.
+   Los aliases sirven solo como ejemplos léxicos, pero debes reconocer menciones que encajen
+   con el concepto y atributos descritos para ese tipo, aunque el texto use otras palabras.
+
+
+3) Los dominios activos (generic, geopolitical, medical, legal, financial) pueden coexistir y compartir tipos o relaciones. 
+   Usa las entidades y relaciones definidas en todos ellos, sin excluir ninguno. 
+   Clasifica cada mención en el dominio más coherente con su contexto semántico,
+   y usa el dominio principal **generic** únicamente como guía de desambiguación,
+   nunca como restricción.
+
+
+4 Usa activamente los aliases del Registry para identificar equivalencias:
+   - Fechas, valores, cantidades o porcentajes → tipos `Date`, `Amount`, `Percentage`, `Measurement`.
+   - Símbolos bursátiles o índices (p. ej., "^SPX", "S&P 500", "^DJI") → tipos `Ticker`, `Index`.
+   - Nombres de organizaciones o compañías (p. ej., "Southern Co.", "Zacks Investment Research") → tipos `Company`, `Organization`.
+   - Si hay productos, contratos o métricas, usa los tipos de sus dominios asociados (p. ej., `Product`, `Contract`, `Metric`).
+
+5 Si el texto expresa una relación semántica entre entidades (por ejemplo: “reportó ingresos de”, “pertenece a”, “anunció la compra de”),
+   crea un objeto adicional con `"type"` igual al nombre de la relación definida en el Registry 
+   (por ejemplo: `"reports"`, `"belongs_to_index"`, `"acquired"`) y el `"domain"` correspondiente.
+
+6 Cada mención debe tener evidencia textual directa. Incluye:
+   - `"start_char"` y `"end_char"` con posiciones aproximadas.
+   - `"source_chunk"` con el identificador del bloque en que aparece.
+   No incluyas inferencias sin texto o información externa.
+
+7 Evita duplicados triviales: si una mención aparece repetida con el mismo `text`, `type` y `domain`, conserva solo una.
+
+8 Devuelve **únicamente un JSON array válido**, con objetos que sigan esta estructura:
+   [
+     {"text":"...","type":"...","domain":"...","confidence":0.95,
+       "start_char":null,"end_char":null,"source_chunk":"..."}
+   ]
+   No incluyas comentarios, backticks, ni texto adicional fuera del JSON.
+   Si no hay menciones válidas, devuelve [].
+
+[
+  {
+    "text": "Entity A",
+    "type": "Organization",
+    "domain": "generic",
+    "confidence": 0.95,
+    "start_char": 10,
+    "end_char": 19,
+    "source_chunk": "CHUNK-001"
+  },
+  {
+    "text": "2024-05-10",
+    "type": "Date",
+    "domain": "generic",
+    "confidence": 0.93,
+    "start_char": 55,
+    "end_char": 65,
+    "source_chunk": "CHUNK-001"
+  },
+  {
+    "text": "$1,000,000",
+    "type": "Amount",
+    "domain": "financial",
+    "confidence": 0.92,
+    "start_char": 120,
+    "end_char": 130,
+    "source_chunk": "CHUNK-001"
+  },
+  {
+    "text": "ABC Index",
+    "type": "Index",
+    "domain": "financial",
+    "confidence": 0.90,
+    "start_char": 200,
+    "end_char": 209,
+    "source_chunk": "CHUNK-001"
+  },
+  {
+    "text": "XZY-100",
+    "type": "Ticker",
+    "domain": "financial",
+    "confidence": 0.88,
+    "start_char": 220,
+    "end_char": 227,
+    "source_chunk": "CHUNK-001"
+  },
+  {
+    "text": "Service Contract",
+    "type": "Contract",
+    "domain": "legal",
+    "confidence": 0.87,
+    "start_char": 310,
+    "end_char": 326,
+    "source_chunk": "CHUNK-001"
+  },
+  {
+    "text": "Product Model 5",
+    "type": "Product",
+    "domain": "tech_review",
+    "confidence": 0.86,
+    "start_char": 400,
+    "end_char": 414,
+    "source_chunk": "CHUNK-001"
+  },
+  {
+    "text": "Entity A reported earnings of $1,000,000",
+    "type": "reports",
+    "domain": "financial",
+    "confidence": 0.90,
+    "start_char": 450,
+    "end_char": 495,
+    "source_chunk": "CHUNK-001"
+  }
+]
+
+ Texto a analizar:
+[CHUNK DOC-8680_0005_0A382B1746] lincoln engagement became distinctly personal occasion confederate general jubal early raided washington d c legend lincoln watched exposed position union captain future supreme court justice oliver wendell holmes jr shouted him down damn fool shot story commonly regarded apocryphal grant continued weaken lee forces efforts discuss peace began confederate vice president stephens led group meeting lincoln seward others hampton roads lincoln refused negotiate confederacy coequal objective end fighting not realized april grant nearly encircled petersburg siege confederate government evacuated richmond lincoln visited conquered capital april lee surrendered grant appomattox officially ending war reelection lincoln ran reelection uniting main republican factions along war democrats edwin m stanton andrew johnson lincoln conversation patronage powers greatly expanded peacetime build support fend off radicals efforts replace him convention republicans selected johnson running mate broaden coalition include war democrats well republicans lincoln ran label new union party grant bloody stalemates damaged lincoln re election prospects republicans feared defeat lincoln confidentially pledged writing lose election defeat confederacy turning white house lincoln not show pledge cabinet asked sign sealed envelope pledge read follows democratic platform followed peace wing party called war failure candidate mcclellan supported war repudiated platform meanwhile lincoln emboldened grant troops republican party support sherman capture atlanta september david farragut capture mobile ended defeatism democratic party deeply split leaders soldiers openly lincoln national union party united lincoln support emancipation state republican parties stressed perfidy copperheads november lincoln carried states including percent union soldiers march lincoln delivered second inaugural address deemed war casualties god historian mark noll places speech small handful semi sacred texts americans conceive place world inscribed lincoln memorial lincoln said reconstruction reconstruction preceded war end lincoln associates considered reintegration nation fates confederate leaders freed slaves general asked lincoln defeated confederates treated lincoln replied em up easy lincoln determined find meaning war aftermath not want continue outcast southern states main goal keep union together proceeded focusing not blame rebuild nation lincoln led moderates reconstruction policy opposed radicals rep thaddeus stevens sen charles sumner sen benjamin wade otherwise remained lincoln allies determined reunite nation not alienate south lincoln urged speedy elections generous terms held amnesty proclamation december offered pardons not held confederate civil office not mistreated union prisoners willing sign oath allegiance southern states fell needed leaders administrations restored tennessee arkansas lincoln respectively appointed johnson frederick steele military governors louisiana lincoln ordered general nathaniel p banks promote plan reestablish statehood percent voters agreed reconstructed states abolished slavery democratic opponents accused lincoln using military ensure republicans political aspirations radicals denounced policy lenient passed plan wade davis bill lincoln vetoed radicals retaliated refusing seat elected representatives louisiana arkansas tennessee lincoln appointments designed harness moderates radicals fill chief justice taney seat supreme court named radicals choice salmon p chase lincoln believed uphold emancipation paper money policies implementing emancipation proclamation lincoln increased pressure congress outlaw slavery throughout nation constitutional amendment declared amendment clinch whole matter december amendment brought congress senate passed april first vote house representatives fell short required thirds majority passage became part lincoln reelection platform successful reelection second attempt house passed january ratification became thirteenth amendment united states constitution december lincoln believed federal government limited responsibility millions freedmen signed senator charles sumner freedmen bureau bill set up temporary federal agency designed meet immediate needs former slaves law opened land lease years ability purchase title freedmen lincoln announced reconstruction plan involved short term military control pending readmission control southern unionists historians agree impossible predict reconstruction proceeded lincoln lived biographers james g randall richard current according david lincove argue eric foner argues native americans lincoln experience native americans started early killing grandfather front family served captain state militia black hawk war saw no combat presidency policy toward indians based politics appointments indian bureau reward supporters minnesota wisconsin office administration faced difficulties guarding western settlers railroads telegraphs indian attacks august sioux dakota uprising broke out minnesota hundreds settlers killed displaced homes washington deeply alarmed feared incorrectly represent confederate conspiracy start war northwestern frontier lincoln ordered thousands confederate prisoners war sent railroad put down uprising confederates protested forcing confederate prisoners fight indians lincoln revoked policy set foot minnesota lincoln sent general john pope minnesota commander new department northwest couple weeks hostilities arrived fond du lac band chippewa sent lincoln letter begging go war united states sioux lincoln send minnesota troops fight south shortly mille lacs band chief offered st cloud minnesota chippewa specified wanted indigenous rules warfare meant no prisoners war no surrender no peace agreement lincoln not accept chippewa offer no means control outcome women children considered legitimate casualties native american warfare chippewa signing letter chief naw gaw nub received presidential medal lincoln earlier year serving gen pope minnesota congressman henry h sibley minnesota governor sibley colonel united states volunteers command force tasked fighting war eventually defeated little crow forces battle wood lake day mdewakanton force surrendered camp release chippewa war council met minnesota capitol chippewa offer lincoln fight sioux sibley ordered military commission review actions captured try committed war crimes legitimacy military commissions trying opposing combatants established mexican war sibley thought men wanted trial gen pope ordered detained warriors tried done given death sentences subject presidential review lincoln ordered gen pope send trial transcripts washington staff pored trials lawyer lincoln saw issues slowly realized trials divided groups combat combatants combat civilians groups identified transcripts first group pages length second group pages up twelve placed cases first group commuted sentences largest mass commutation history second group went forty commuted turning state witness sibley dismissed overwhelming proof surfaced exonerating man remaining executed largest mass hanging u history quickly questions arose concerning executions not answered four months executions lincoln issued general order relates minnesota war civil war congressman alexander ramsey told lincoln gotten re election support minnesota executed mdewakanton lincoln responded not afford hang men votes men sentences commuted sent military prison davenport iowa few

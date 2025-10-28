@@ -1,0 +1,154 @@
+Eres un analista experto en extracción de entidades y relaciones.Con mucho conocimiento en la creación de Grafos de Conocimiento (Knowledge Graphs) y ontologías.
+
+El selector clasificó el documento con dominio principal **generic** 
+y los siguientes dominios complementarios (en orden de relevancia descendente): geopolitical, medical, legal, financial.
+Interpreta que el dominio principal aporta el contexto dominante,
+pero las entidades y relaciones pueden provenir de cualquiera de los dominios listados,
+sin excluir ninguno.
+
+Ontología combinada (Registry):
+- **GENERIC**:
+    • Entidades → Person, Organization, Date, DateExpression, Location, Country, Amount, Currency, Identifier, ReferenceCode, DocumentID, AccountNumber, TransactionCode, Barcode, URL, EmailAddress, PhoneNumber, Address, IPAddress, SocialHandle, Hashtag, FileReference, Percentage, Measurement, Time, Duration, Sentiment, ActionVerb, Emoji
+    • Aliases → article, comentario, comment, content, documento, entry, file, general, mensaje, note, post, publicación
+- **GEOPOLITICAL**:
+    • Entidades → Country, City, Event
+    • Aliases → agreement, alianza, border, city, ciudad, conflict, conflicto, country, estado, frontera, guerra, nación
+- **MEDICAL**:
+    • Entidades → Disease, Symptom, Drug, Patient
+    • Aliases → análisis clínico, cirugía, clinical trial, clínico, diagnosis, diagnóstico, doctor, drug, enfermedad, fármaco, historial médico, hospital
+- **LEGAL**:
+    • Entidades → Party, Contract, Representative, Obligation, Penalty
+    • Aliases → acuerdo, agreement, claim, clause, cláusula, compliance, contract, contrato, court, demanda, firma, juicio
+- **FINANCIAL**:
+    • Entidades → Invoice, Transaction, Account, Stock, Ticker, Index, EarningsReport, Company, Executive, InvestmentRound, Partnership
+    • Aliases → acciones, acción, account, accounting, acquisition, balance sheet, banco, bank account, benchmark, beneficio, bolsa, bond
+
+
+
+Instrucciones de extracción:
+
+1) Extrae todas las entidades y relaciones **explícitas o semiexplícitas** que aparezcan en el texto 
+   y que correspondan a los tipos definidos en la ontología combinada (Registry) 
+   para los dominios activos listados arriba.
+   Considera semiexplícitas aquellas que se expresan mediante símbolos, unidades, nombres técnicos,
+   convenciones del dominio o abreviaturas. 
+   No inventes entidades nuevas, pero tampoco omitas las que estén presentes
+   de forma implícita en frases o contextos típicos del dominio.
+
+
+2) Usa los tipos de entidad y relación definidos en los dominios activos del Registry 
+   como **esquemas estructurales**, no como filtros de texto.
+   Considera que cada entidad está definida por su nombre, descripción y atributos.
+   Los aliases sirven solo como ejemplos léxicos, pero debes reconocer menciones que encajen
+   con el concepto y atributos descritos para ese tipo, aunque el texto use otras palabras.
+
+
+3) Los dominios activos (generic, geopolitical, medical, legal, financial) pueden coexistir y compartir tipos o relaciones. 
+   Usa las entidades y relaciones definidas en todos ellos, sin excluir ninguno. 
+   Clasifica cada mención en el dominio más coherente con su contexto semántico,
+   y usa el dominio principal **generic** únicamente como guía de desambiguación,
+   nunca como restricción.
+
+
+4 Usa activamente los aliases del Registry para identificar equivalencias:
+   - Fechas, valores, cantidades o porcentajes → tipos `Date`, `Amount`, `Percentage`, `Measurement`.
+   - Símbolos bursátiles o índices (p. ej., "^SPX", "S&P 500", "^DJI") → tipos `Ticker`, `Index`.
+   - Nombres de organizaciones o compañías (p. ej., "Southern Co.", "Zacks Investment Research") → tipos `Company`, `Organization`.
+   - Si hay productos, contratos o métricas, usa los tipos de sus dominios asociados (p. ej., `Product`, `Contract`, `Metric`).
+
+5 Si el texto expresa una relación semántica entre entidades (por ejemplo: “reportó ingresos de”, “pertenece a”, “anunció la compra de”),
+   crea un objeto adicional con `"type"` igual al nombre de la relación definida en el Registry 
+   (por ejemplo: `"reports"`, `"belongs_to_index"`, `"acquired"`) y el `"domain"` correspondiente.
+
+6 Cada mención debe tener evidencia textual directa. Incluye:
+   - `"start_char"` y `"end_char"` con posiciones aproximadas.
+   - `"source_chunk"` con el identificador del bloque en que aparece.
+   No incluyas inferencias sin texto o información externa.
+
+7 Evita duplicados triviales: si una mención aparece repetida con el mismo `text`, `type` y `domain`, conserva solo una.
+
+8 Devuelve **únicamente un JSON array válido**, con objetos que sigan esta estructura:
+   [
+     {"text":"...","type":"...","domain":"...","confidence":0.95,
+       "start_char":null,"end_char":null,"source_chunk":"..."}
+   ]
+   No incluyas comentarios, backticks, ni texto adicional fuera del JSON.
+   Si no hay menciones válidas, devuelve [].
+
+[
+  {
+    "text": "Entity A",
+    "type": "Organization",
+    "domain": "generic",
+    "confidence": 0.95,
+    "start_char": 10,
+    "end_char": 19,
+    "source_chunk": "CHUNK-001"
+  },
+  {
+    "text": "2024-05-10",
+    "type": "Date",
+    "domain": "generic",
+    "confidence": 0.93,
+    "start_char": 55,
+    "end_char": 65,
+    "source_chunk": "CHUNK-001"
+  },
+  {
+    "text": "$1,000,000",
+    "type": "Amount",
+    "domain": "financial",
+    "confidence": 0.92,
+    "start_char": 120,
+    "end_char": 130,
+    "source_chunk": "CHUNK-001"
+  },
+  {
+    "text": "ABC Index",
+    "type": "Index",
+    "domain": "financial",
+    "confidence": 0.90,
+    "start_char": 200,
+    "end_char": 209,
+    "source_chunk": "CHUNK-001"
+  },
+  {
+    "text": "XZY-100",
+    "type": "Ticker",
+    "domain": "financial",
+    "confidence": 0.88,
+    "start_char": 220,
+    "end_char": 227,
+    "source_chunk": "CHUNK-001"
+  },
+  {
+    "text": "Service Contract",
+    "type": "Contract",
+    "domain": "legal",
+    "confidence": 0.87,
+    "start_char": 310,
+    "end_char": 326,
+    "source_chunk": "CHUNK-001"
+  },
+  {
+    "text": "Product Model 5",
+    "type": "Product",
+    "domain": "tech_review",
+    "confidence": 0.86,
+    "start_char": 400,
+    "end_char": 414,
+    "source_chunk": "CHUNK-001"
+  },
+  {
+    "text": "Entity A reported earnings of $1,000,000",
+    "type": "reports",
+    "domain": "financial",
+    "confidence": 0.90,
+    "start_char": 450,
+    "end_char": 495,
+    "source_chunk": "CHUNK-001"
+  }
+]
+
+ Texto a analizar:
+[CHUNK DOC-8680_0001_C4FE6A3FAB] little necks out respect lincoln kept mouth shut lincoln not note children done deaths sons eddie willie profound effects parents lincoln suffered melancholy condition thought clinical depression life mary struggled stresses losing husband sons robert committed time asylum early career militia service lincoln worked general store new salem illinois declared candidacy illinois house representatives interrupted campaign serve captain illinois militia black hawk war lincoln returned home black hawk war planned become blacksmith instead formed partnership year old william berry purchased new salem general store credit license required sell customers single beverages berry obtained bartending licenses lincoln himself lincoln berry general store became tavern well licensed bartenders lincoln berry able sell spirits including liquor cents pint offered wide range alcoholic beverages well food including takeout dinners berry became alcoholic often drunk work lincoln ended up running store himself economy booming business struggled went debt causing lincoln sell share first campaign speech returning military service lincoln observed supporter crowd attack grabbed assailant neck seat trousers tossed him campaign lincoln advocated navigational improvements sangamon river draw crowds raconteur lacked requisite formal education powerful friends money lost election lincoln finished eighth out candidates top four elected received votes cast new salem precinct lincoln served new salem postmaster county surveyor continued voracious reading decided become lawyer studying office established attorney custom lincoln borrowed legal texts attorneys john todd stuart thomas drummond purchased books including blackstone commentaries chitty pleadings read law said legal education studied nobody illinois state legislature lincoln second state house campaign time whig success powerful whig opponent followed four terms illinois house representatives sangamon county championed construction illinois michigan canal canal commissioner voted expand suffrage white landowners white males adopted free soil stance opposing slavery abolition declared institution slavery founded injustice bad policy promulgation abolition doctrines tends increase abate evils echoed henry clay support american colonization society advocated program abolition conjunction settling freed slaves liberia admitted illinois bar september moved springfield began practice law john t stuart mary todd cousin lincoln emerged formidable trial combatant cross examinations closing arguments partnered several years stephen t logan began practice william herndon studious young man january abraham lincoln twenty eight years old delivered first major speech lyceum springfield illinois murder newspaper editor elijah parish lovejoy alton lincoln warned no trans atlantic military giant crush nation cannot come abroad destruction lot ourselves author finisher said lincoln prior april innocent black man francis mcintosh burned alive st louis missouri zann gill describes murders set off chain reaction ultimately prompted abraham lincoln run president u house representatives true record lincoln professed friends old line whig disciple henry clay party favored economic modernization banking tariffs fund internal improvements including railroads urbanization lincoln sought whig nomination illinois th district seat u house representatives defeated john j hardin prevailed party limiting hardin term lincoln not pulled off strategy gaining nomination won election whig illinois delegation dutiful participated votes speeches toed party line assigned committee post office post roads committee expenditures war department lincoln teamed joshua r giddings bill abolish slavery district columbia compensation owners enforcement capture fugitive slaves popular vote matter dropped bill eluded whig support political views foreign military policy lincoln spoke mexican american war imputed president james k polk desire military glory attractive rainbow rises showers blood supported wilmot proviso failed proposal ban slavery u territory won mexico lincoln emphasized opposition polk drafting introducing spot resolutions war begun killing american soldiers mexican cavalry patrol disputed territory polk insisted mexican soldiers invaded territory shed blood fellow citizens soil lincoln demanded polk show congress exact spot blood shed prove spot american soil resolution ignored congress national papers cost lincoln political support district illinois newspaper derisively nicknamed him spotty lincoln lincoln regretted statements especially attack presidential war making powers lincoln pledged serve term house realizing clay unlikely win presidency supported general zachary taylor whig nomination presidential election taylor won lincoln hoped vain appointed commissioner general land office administration offered appoint him secretary governor oregon territory consolation distant territory democratic stronghold acceptance post disrupted legal political career illinois declined resumed law practice prairie lawyer springfield practice lincoln handled kind business come prairie lawyer twice year appeared consecutive weeks county seats midstate county courts continued years lincoln handled transportation cases midst nation western expansion particularly river barge conflicts new railroad bridges riverboat man lincoln initially favored interests ultimately represented whoever hired him represented bridge company riverboat company hurd v rock island bridge company landmark case involving canal boat sank hitting bridge received patent flotation device movement boats shallow water idea commercialized lincoln president hold patent lincoln appeared illinois supreme court cases sole counsel cases decided favor largest clients illinois central railroad legal reputation gave rise nickname honest abe lincoln argued criminal trial defending william duff armstrong trial murder james preston metzker case famous lincoln fact established judicial notice challenge credibility eyewitness opposing witness testified seeing crime moonlight lincoln produced farmers almanac showing moon low angle drastically reducing visibility armstrong acquitted leading up presidential campaign lincoln elevated profile murder case defense simeon quinn peachy harrison third cousin harrison grandson lincoln political opponent rev peter cartwright harrison charged murder greek crafton lay dying wounds confessed cartwright provoked harrison lincoln angrily protested judge initial decision exclude cartwright testimony confession inadmissible hearsay lincoln argued testimony involved dying declaration not subject hearsay rule instead holding lincoln contempt court expected judge democrat reversed ruling admitted testimony evidence resulting harrison acquittal republican politics emergence republican leader debate status slavery territories failed alleviate tensions slave holding south free north failure compromise legislative package designed address issue eulogy clay lincoln highlighted latter support gradual emancipation opposition extremes slavery issue slavery debate nebraska kansas territories became particularly acrimonious illinois senator stephen douglas proposed popular sovereignty compromise measure allow electorate territory decide status slavery legislation alarmed northerners sought prevent spread slavery result douglas kansas nebraska act narrowly passed congress lincoln not comment act months peoria speech october lincoln declared opposition slavery repeated en route presidency said kansas act declared indifference think covert real zeal spread slavery cannot hate hate monstrous injustice slavery itself hate deprives republican example influence world lincoln attacks kansas nebraska act marked return political life

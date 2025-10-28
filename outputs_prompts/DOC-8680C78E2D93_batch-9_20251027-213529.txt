@@ -1,31 +1,31 @@
 Eres un analista experto en extracción de entidades y relaciones.Con mucho conocimiento en la creación de Grafos de Conocimiento (Knowledge Graphs) y ontologías.
 
 El selector clasificó el documento con dominio principal **generic** 
-y los siguientes dominios complementarios (en orden de relevancia descendente): legal, medical.
+y los siguientes dominios complementarios (en orden de relevancia descendente): geopolitical, medical, legal, financial.
 Interpreta que el dominio principal aporta el contexto dominante,
 pero las entidades y relaciones pueden provenir de cualquiera de los dominios listados,
 sin excluir ninguno.
 
 Ontología combinada (Registry):
 - **GENERIC**:
-    • Entidades → Person, Organization, Date, DateExpression, Location, Amount, Currency, Identifier, ReferenceCode, DocumentID, AccountNumber, TransactionCode, Barcode, URL, EmailAddress, PhoneNumber, Address, IPAddress, SocialHandle, Hashtag, FileReference, Percentage, Measurement, Time, Duration, Sentiment, ActionVerb, Emoji
-    • Relaciones → mentions, links_to, refers_to, includes_emoji, has_contact, located_at
+    • Entidades → Person, Organization, Date, DateExpression, Location, Country, Amount, Currency, Identifier, ReferenceCode, DocumentID, AccountNumber, TransactionCode, Barcode, URL, EmailAddress, PhoneNumber, Address, IPAddress, SocialHandle, Hashtag, FileReference, Percentage, Measurement, Time, Duration, Sentiment, ActionVerb, Emoji
     • Aliases → article, comentario, comment, content, documento, entry, file, general, mensaje, note, post, publicación
-- **LEGAL**:
-    • Entidades → Party, Contract, Representative, Obligation, Penalty
-    • Relaciones → binds, imposes, penalizes
-    • Aliases → acuerdo, agreement, claim, clause, cláusula, compliance, contract, contrato, court, demanda, firma, juicio
+- **GEOPOLITICAL**:
+    • Entidades → Country, City, Event
+    • Aliases → agreement, alianza, border, city, ciudad, conflict, conflicto, country, estado, frontera, guerra, nación
 - **MEDICAL**:
     • Entidades → Disease, Symptom, Drug, Patient
-    • Relaciones → has_symptom, treated_with, attended_by
     • Aliases → análisis clínico, cirugía, clinical trial, clínico, diagnosis, diagnóstico, doctor, drug, enfermedad, fármaco, historial médico, hospital
+- **LEGAL**:
+    • Entidades → Party, Contract, Representative, Obligation, Penalty
+    • Aliases → acuerdo, agreement, claim, clause, cláusula, compliance, contract, contrato, court, demanda, firma, juicio
+- **FINANCIAL**:
+    • Entidades → Invoice, Transaction, Account, Stock, Ticker, Index, EarningsReport, Company, Executive, InvestmentRound, Partnership
+    • Aliases → acciones, acción, account, accounting, acquisition, balance sheet, banco, bank account, benchmark, beneficio, bolsa, bond
 
-Señales y pesos del selector:
-- Señales: keywords, embeddings, topics, context, prior
-- Pesos: {"alpha_kw": 0.2, "beta_emb": 0.4, "gamma_ctx": 0.2, "delta_top": 0.15, "epsilon_prior": 0.05}
-- Explicación: Dominio 'legal' seleccionado por calidad contextual (cohesión/salud/novelty/baja redundancia), similitud semántica (embeddings), afinidad léxica (keywords). (precisión_kw=0.11, recall_kw=0.04, label_emb=centroid) | Confianza baja: se prepara esquema genérico como respaldo.
 
-Instrucciones (modo enriquecido y jerárquico):
+
+Instrucciones de extracción:
 
 1) Extrae todas las entidades y relaciones **explícitas o semiexplícitas** que aparezcan en el texto 
    y que correspondan a los tipos definidos en la ontología combinada (Registry) 
@@ -43,7 +43,7 @@ Instrucciones (modo enriquecido y jerárquico):
    con el concepto y atributos descritos para ese tipo, aunque el texto use otras palabras.
 
 
-3) Los dominios activos (generic, legal, medical) pueden coexistir y compartir tipos o relaciones. 
+3) Los dominios activos (generic, geopolitical, medical, legal, financial) pueden coexistir y compartir tipos o relaciones. 
    Usa las entidades y relaciones definidas en todos ellos, sin excluir ninguno. 
    Clasifica cada mención en el dominio más coherente con su contexto semántico,
    y usa el dominio principal **generic** únicamente como guía de desambiguación,
@@ -151,4 +151,4 @@ Instrucciones (modo enriquecido y jerárquico):
 ]
 
  Texto a analizar:
-[CHUNK DOC-13AE_0000_0EA30B7D0A] trial alice nc trial chapter chapter chapter chapter four chapter five chapter six chapter seven chapter eight chapter nine chapter ten t t f k p p t d w book downloaded www aliceandbooks com find public domain books website c c g t m b someone telling lies josef k knew done nothing wrong morning arrested day eight morning brought breakfast mrs grubach cook mrs grubach landlady today didn t come happened k waited little looked pillow old woman lived opposite watching him inquisitiveness unusual finally hungry disconcerted rang bell immediately knock door man entered seen man house slim firmly built clothes black close fitting folds pockets buckles buttons belt gave impression practical making clear actually asked k sitting half upright bed man ignored question arrival simply accepted merely replied rang anna brought breakfast said k tried work out man actually first silence observation thinking man didn t stay looked long instead went door opened slightly said someone clearly standing immediately behind wants anna bring him breakfast little laughter neighbouring room not clear sound several people laughing strange man not learned anything hadn t known said k making report not possible first time happened said k jumped out bed quickly pulled trousers want see next room mrs grubach disturbed way immediately occurred him needn t said out loud extent acknowledged authority didn t seem important him time stranger took said don t think d better stay want stay spoken ve introduced yourself meant good said stranger opened door time asked next room k entered slowly intended looked first glance exactly previous evening mrs grubach living room filled furniture tablecloths porcelain photographs little space usual today not immediately obvious especially main difference presence man sitting open window book looked up stayed room didn t franz tell want said k looking back forth new acquaintance named franz remained doorway open window noticed old woman come close window opposite continue see everything showing inquisitiveness seem going senile want see mrs grubach said k making movement tearing himself away men standing well away him wanted go no said man window threw book down coffee table stood up t go away re arrest seems said k arrest asked something re not allowed tell go room wait proceedings underway ll learn everything good time not part job friendly towards hope no apart franz hear friendly towards rules himself carry good luck arresting officers reckon things going well k wanted sit down saw apart chair window nowhere anywhere room sit ll chance see yourself true said franz men walked up k significantly bigger him especially second man frequently slapped him shoulder felt k nightshirt said wear lower quality keep nightshirt along underclothes return him case turned out well better give things leave storeroom said things tendency go missing storeroom certain amount time sell things off case involved come end not cases last long time especially ones coming up lately d give money wouldn t not re offered sell counts slipped side things lose value anyway passed hand hand year year k paid hardly attention saying not place value possessed decided happened important him clear understanding position not think clearly people second policeman belly policemen looked friendly enough sticking out towards him k looked up saw dry bony face not seem fit body strong nose twisted side ignoring k sharing understanding policeman sort people talking office belong k living free country everywhere peace laws decent upheld dared accost him home
+[CHUNK DOC-8680_0008_B08618BB57] project northern illinois university libraries teaching abraham lincoln national endowment humanities popular song noble chief passed away cooper thomas abraham lincoln recollections newspaper articles collection mclean county museum history digitized items alfred whital stern collection lincolniana rare book special collections division library congress births deaths murders united states assassinated politicians th century american politicians th century presidents united states american abolitionists american colonization movement american lawyers admitted practice law reading law american military personnel indian wars american militia officers american nationalists american political party founders illinois postmasters american surveyors assassinated presidents united states burials oak ridge cemetery candidates united states presidential election candidates united states presidential election hall fame great americans inductees illinois central railroad people illinois republicans illinois lawyers abraham male murder victims members illinois house representatives people associated assassination abraham lincoln people coles county illinois people larue county kentucky people macon county illinois people spencer county indiana people murdered washington d c people illinois american civil war people mood disorders politicians springfield illinois presidents united states republican party united states presidential nominees republican party presidents united states union american civil war political leaders whig party members united states house representatives illinois th century assassinated national presidents assassinated former subnational legislators
