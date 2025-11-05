@@ -24,12 +24,12 @@
 
 | Nº | Subsistema | Rol principal | Entrada | Salida | Estado |
 |-:|--------------------------------|---------------------------------------------------------------------------|---------------------|--------------------------|--------|
-| 1 | **Parser** | Genera **IR JSON** homogénea con metadatos y layout | Doc (PDF/DOCX/IMG) | `DocumentIR` JSON | ✅ |
-| 2 | **Hybrid Contextizer (doc)** | Asigna **tópicos y keywords globales** a nivel documento | `DocumentIR` | `DocumentIR+Topics` JSON | ✅ |
-| 3 | **HybridChunker** | Segmenta documento en **chunks semánticos estables (≤2048 tokens)** | `DocumentIR+Topics` | `DocumentChunks` JSON | ✅ |
-| 4 | **Hybrid Contextizer (chunk)** | Asigna tópicos locales a cada chunk (subtemas); enlaza con tópicos globales | `DocumentChunks` | `Chunks+Topics` JSON | ✅ |
-| 5 | **Adaptive Schema Selector** | Define dinámicamente entidades relevantes según contexto | `Chunks+Topics` | `SchemaSelection` JSON | 🔜 |
-| 6 | **Mentions (NER/RE) LLM** | Detecta menciones condicionadas por tópicos | `Chunks+Topics` | `Mentions` JSON | 🔜 |
+| 1 | **Parser** | Genera **IR JSON** homogénea con metadatos y layout | Doc (PDF/DOCX/IMG) | `DocumentIR` JSON |  |
+| 2 | **Hybrid Contextizer (doc)** | Asigna **tópicos y keywords globales** a nivel documento | `DocumentIR` | `DocumentIR+Topics` JSON |  |
+| 3 | **HybridChunker** | Segmenta documento en **chunks semánticos estables (≤2048 tokens)** | `DocumentIR+Topics` | `DocumentChunks` JSON |  |
+| 4 | **Hybrid Contextizer (chunk)** | Asigna tópicos locales a cada chunk (subtemas); enlaza con tópicos globales | `DocumentChunks` | `Chunks+Topics` JSON |  |
+| 5 | **Adaptive Schema Selector** | Define dinámicamente entidades relevantes según contexto | `Chunks+Topics` | `SchemaSelection` JSON |  |
+| 6 | **Mentions (NER/RE) LLM** | Detecta menciones condicionadas por tópicos | `Chunks+Topics` | `Mentions` JSON |  |
 | * | **Graph Export** | Publica entidades y relaciones en grafos (Neo4j, GraphDB, RDF/SHACL) | `Entities+Triples` | Grafo / DB | 🔜 |
 
 ---
@@ -53,7 +53,7 @@ project_T2G/
 │   ├── contextizer.py               # Orquestador principal (doc- y chunk-level)
 │   ├── metrics.py                   # Métricas básicas de cobertura, redundancia, etc.
 │   ├── metrics_ext.py               # Métricas extendidas (coherence_semantic, entropy,etc.)
-    ├── models.py                    # Clases internas (TopicItem, ContextizerResult)
+│   ├── models.py                    # Clases internas (TopicItem, ContextizerResult)
 │   ├── schemas.py                   # Contratos Pydantic (DocumentTopics, ChunkTopics)
 │   ├── utils.py                     # Normalización, stopwords, embeddings, caching
 │   ├── hybrid/                      # Núcleo del modo híbrido
@@ -71,6 +71,15 @@ project_T2G/
 │   ├── registry.py                  # Ontologías y dominios (medical, legal, etc.)
 │   ├── schemas.py                   # Contratos Pydantic
 │   ├── selector.py                  # Lógica de scoring y selección adaptativa
+│   ├── utils.py                     # Funciones auxiliares (similitud, normalización)
+│   └── __init__.py
+│
+├── mentions/
+│   ├── llm_client.py                # Conexión a los modelos LLM
+│   ├── llm_extractor.py             # Maestro para extraer la Entidades
+│   ├── metrics.py                   # Metricas de desempeño del Modelo
+│   ├── schemas.py                   # Contratos Pydantic
+│   ├── prompt_builder.py            # Creador de Prompt aumentativo
 │   ├── utils.py                     # Funciones auxiliares (similitud, normalización)
 │   └── __init__.py
 │
@@ -93,7 +102,7 @@ project_T2G/
 
 ---
 
-### 1) Parser (Doc → IR) ✅
+### 1) Parser (Doc → IR) 
 
 **Entrada:** PDF / DOCX / PNG / JPG  
 **Salida:** `DocumentIR` (`outputs_ir/{DOC}_*.json`)
@@ -132,7 +141,7 @@ project_T2G/
 
 ---
 
-### 2) Hybrid Contextizer (doc-level) ✅
+### 2) Hybrid Contextizer (doc-level) 
 
 **Entrada:** `DocumentIR` (`outputs_ir/*.json`)  
 **Salida:** `DocumentIR+Topics` (`outputs_doc_topics/*.json`)
@@ -333,7 +342,7 @@ Las métricas cuantitativas (`metrics_ext.py`) permiten auditar la calidad semá
 
 ---
 
-### 3) HybridChunker ✅
+### 3) HybridChunker 
 
 **Entrada:** `DocumentIR+Topics` (`outputs_doc_topics/*.json`)  
 **Salida:** `DocumentChunks` (`outputs_chunks/*.json`)
@@ -443,7 +452,7 @@ Para evaluar la calidad y la coherencia de los chunks, se calculan métricas cua
 
 ---
 
-### 4) Hybrid Contextizer (chunk-level) ✅
+### 4) Hybrid Contextizer (chunk-level) 
 
 **Entrada:** `DocumentChunks` (`outputs_chunks/*.json`)  
 **Salida:** `Chunks+Topics` (`outputs_chunks/*.json`)
@@ -597,7 +606,7 @@ Estas métricas permiten identificar fragmentos repetitivos o irrelevantes.
 
 ---
 
-### 5) Adaptive Schema Selector ✅
+### 5) Adaptive Schema Selector 
 
 **Entrada:** `Chunks+Topics` (`outputs_chunks/*.json`)  
 **Salida:** `SchemaSelection` (`outputs_schema/*.json`)

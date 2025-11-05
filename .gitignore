@@ -118,6 +118,7 @@ outputs_doc_topics/
 outputs_schema/
 outputs_mentions/
 output_prompts/
+output_graph/
 # Artefactos temporales
 tmp/
 .tmp/
@@ -143,3 +144,9 @@ docs/**
 !docs/.gitkeep
 !docs/samples/**
 
+#Neo4j data
+# Neo4j runtime
+neo4j/data/
+neo4j/logs/
+neo4j/import/*.csv
+neo4j/import/*.json

@@ -427,12 +427,13 @@ class Parser:
             logger.debug("No se pudo calcular sha256: %s", e)
 
         doc = DocumentIR(
-            doc_id=DocumentIR.new_id(),
+            doc_id=DocumentIR.new_id(path),
             source_path=path,
             mime=mime,
             meta=meta,
             prov=Provenance(extractor="pdfplumber/python-docx/pytesseract", stage="parser"),
         )
+
 
         if mime == "application/pdf" or path.lower().endswith(".pdf"):
             pages = self._parse_pdf(path)

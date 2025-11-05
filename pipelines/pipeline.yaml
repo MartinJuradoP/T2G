@@ -129,4 +129,13 @@ stages:
       temperature: 0.1
       max_tokens: 2048          # subir para ventanas grandes
       confidence_threshold: 0.10 # bajar un poco para no perder menciones borderline
-
+  # ─────────────────────────────────────────────────────────────
+  # 7 Graph Builder — Ne4j integración de entidades y relaciones
+  # ─────────────────────────────────────────────────────────────
+  - name: graph-builder
+    args:
+      clean_outdir: true
+      ir_glob: "outputs_ir"
+      mentions_glob: "outputs_mentions"
+      outdir: "outputs_graph"
+      continue_on_error: true

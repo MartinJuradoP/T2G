@@ -190,9 +190,30 @@ class DocumentIR(BaseModel):
     prov: Optional[Provenance] = None
 
     @staticmethod
-    def new_id() -> str:
-        """Genera un identificador corto y humano-legible (DOC-XXXX...)."""
-        return f"DOC-{uuid.uuid4().hex[:12].upper()}"
+    def new_id(source_path: str) -> str:
+        """
+        Genera un ID determinista compuesto:
+        - base_id: estable por nombre base del archivo.
+        - version_id: hash dependiente del contenido.
+        Ejemplo: DOC-92A1B3F0-1A2C
+        """
+        import hashlib, os
+
+        base_name = os.path.basename(source_path).lower()
+        base_id = hashlib.sha1(base_name.encode()).hexdigest()[:8].upper()
+
+        if not os.path.exists(source_path):
+            return f"DOC-{base_id}-0000"
+
+        sha = hashlib.sha256()
+        with open(source_path, "rb") as f:
+            for chunk in iter(lambda: f.read(8192), b""):
+                sha.update(chunk)
+        version = sha.hexdigest()[:4].upper()
+
+        return f"DOC-{base_id}-{version}"
+
+
 
 # -------------------------------------------------------------------
 # Extensiones opcionales (para subsistemas posteriores)

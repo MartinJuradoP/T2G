@@ -1,7 +1,7 @@
 Eres un analista experto en extracción de entidades y relaciones.Con mucho conocimiento en la creación de Grafos de Conocimiento (Knowledge Graphs) y ontologías.
 
 El selector clasificó el documento con dominio principal **generic** 
-y los siguientes dominios complementarios (en orden de relevancia descendente): geopolitical, medical, legal, financial.
+y los siguientes dominios complementarios (en orden de relevancia descendente): financial, reviews_and_opinions, tech_review, ecommerce.
 Interpreta que el dominio principal aporta el contexto dominante,
 pero las entidades y relaciones pueden provenir de cualquiera de los dominios listados,
 sin excluir ninguno.
@@ -10,18 +10,18 @@ Ontología combinada (Registry):
 - **GENERIC**:
     • Entidades → Person, Organization, Date, DateExpression, Location, Country, Amount, Currency, Identifier, ReferenceCode, DocumentID, AccountNumber, TransactionCode, Barcode, URL, EmailAddress, PhoneNumber, Address, IPAddress, SocialHandle, Hashtag, FileReference, Percentage, Measurement, Time, Duration, Sentiment, ActionVerb, Emoji
     • Aliases → article, comentario, comment, content, documento, entry, file, general, mensaje, note, post, publicación
-- **GEOPOLITICAL**:
-    • Entidades → Country, City, Event
-    • Aliases → agreement, alianza, border, city, ciudad, conflict, conflicto, country, estado, frontera, guerra, nación
-- **MEDICAL**:
-    • Entidades → Disease, Symptom, Drug, Patient
-    • Aliases → análisis clínico, cirugía, clinical trial, clínico, diagnosis, diagnóstico, doctor, drug, enfermedad, fármaco, historial médico, hospital
-- **LEGAL**:
-    • Entidades → Party, Contract, Representative, Obligation, Penalty
-    • Aliases → acuerdo, agreement, claim, clause, cláusula, compliance, contract, contrato, court, demanda, firma, juicio
 - **FINANCIAL**:
     • Entidades → Invoice, Transaction, Account, Stock, Ticker, Index, EarningsReport, Company, Executive, InvestmentRound, Partnership
     • Aliases → acciones, acción, account, accounting, acquisition, balance sheet, banco, bank account, benchmark, beneficio, bolsa, bond
+- **REVIEWS_AND_OPINIONS**:
+    • Entidades → Review, ServiceAspect, Emotion, Business
+    • Aliases → affordable, amazing, ambiente, atmosphere, attitude, awesome, awful, bad, bar, bebida, beer, best
+- **TECH_REVIEW**:
+    • Entidades → Product, Metric
+    • Aliases → accuracy, ai, artificial intelligence, benchmark, cpu, data, deep learning, digital transformation, emerging technology, gpu, hardware, inference
+- **ECOMMERCE**:
+    • Entidades → Order, Product, Review
+    • Aliases → carrito, cliente, compra, customer, order, pedido, precio, product, producto, purchase, review, seller
 
 
 
@@ -43,7 +43,7 @@ Instrucciones de extracción:
    con el concepto y atributos descritos para ese tipo, aunque el texto use otras palabras.
 
 
-3) Los dominios activos (generic, geopolitical, medical, legal, financial) pueden coexistir y compartir tipos o relaciones. 
+3) Los dominios activos (generic, financial, reviews_and_opinions, tech_review, ecommerce) pueden coexistir y compartir tipos o relaciones. 
    Usa las entidades y relaciones definidas en todos ellos, sin excluir ninguno. 
    Clasifica cada mención en el dominio más coherente con su contexto semántico,
    y usa el dominio principal **generic** únicamente como guía de desambiguación,
@@ -151,4 +151,4 @@ Instrucciones de extracción:
 ]
 
  Texto a analizar:
-[CHUNK DOC-8680_0008_B08618BB57] project northern illinois university libraries teaching abraham lincoln national endowment humanities popular song noble chief passed away cooper thomas abraham lincoln recollections newspaper articles collection mclean county museum history digitized items alfred whital stern collection lincolniana rare book special collections division library congress births deaths murders united states assassinated politicians th century american politicians th century presidents united states american abolitionists american colonization movement american lawyers admitted practice law reading law american military personnel indian wars american militia officers american nationalists american political party founders illinois postmasters american surveyors assassinated presidents united states burials oak ridge cemetery candidates united states presidential election candidates united states presidential election hall fame great americans inductees illinois central railroad people illinois republicans illinois lawyers abraham male murder victims members illinois house representatives people associated assassination abraham lincoln people coles county illinois people larue county kentucky people macon county illinois people spencer county indiana people murdered washington d c people illinois american civil war people mood disorders politicians springfield illinois presidents united states republican party united states presidential nominees republican party presidents united states union american civil war political leaders whig party members united states house representatives illinois th century assassinated national presidents assassinated former subnational legislators
+[CHUNK DOC-1753_0000_8B56F14516] bloomberg gold held losses choppy session day suffering worst rout years amid concerns rally run far fast spot gold fell wednesday paring losses followed tuesday plunge saw bullion tumble point technical indicators showed year record breaking rally likely overstretched bank america corp nvidia corp tesla inc read bloomberg pritzker slams chicago mayor plan tax big payrolls cruise ships show south korea struggle host global leaders mta sell million debt amid tolling plan legal fight nearly ounce bit expensive side said darwei kung head commodities portfolio manager dws group sense see elevated price come out market said adding pullback doesn t change long term bullish view gold traders highlighted comments ubs group ag suggested surge precious metals cool down near term federal reserve maintains cautious stance interest rates watch stanchart cooper gold silver losses source bloomberg retreat brought abrupt halt rapid advances underway mid august called debasement trade investors avoid sovereign debt currencies protect themselves runaway budget deficits bets federal reserve outsized rate cut end year primary drivers recent months gold up year suspect ll find floor few days drivers gold haven t changed nothing changed said adrian day owns namesake asset management firm maryland fed not going raise rates government not going fix budget deficit t see fundamental factors going meaningfully change people say well don t buy gold sitting sidelines early period gold rally retail investors taken bigger role recent months part enthused debasement theme pictures showing queues buyers lining up outside bullion retailers went viral social media options volume top gold backed etfs futures contracts popular way retail investors take big bets metal value surged president donald trump aggressive moves try reshape global trade heightened geopolitical uncertainty underlined move higher precious metals year central banks keen diversify away dollar kept buying flows exchange traded funds retail investors tried rally watch gold silver worst routs years put abrupt halt scorching rally nicole sy explains happened precious metals go source bloomberg citigroup inc cut overweight gold recommendation tuesday slump citing concerns stretched positioning bank expects consolidation around ounce coming weeks strategists including charlie massy collier said note eventually older part gold bull story continued central bank demand diversify away dollar come back current levels no rush position wrote adding prices run ahead debasement story declines came investors weighed potential progress talks china following recent resurgence tensions bolstered demand haven assets trump tuesday predicted upcoming meeting chinese president xi jinping yield good deal trade conceding talks not happen bloomberg strategists say gold slump tuesday accident waiting happen realized volatility spiked higher late hedge funds begun question risk reward ratio stellar year commodity ven ram macro strategist read spot gold down ounce p m new york silver lower swinging gains losses following tuesday plunge platinum higher earlier surged biggest intraday jump palladium rose assistance winnie hsu sybilla gross yihui xie read bloomberg businessweek want win inside gavin newsom plan taking trump dead dolphins diverted cash sink cancun theme park operator inside credit card battle win america richest shoppers uber eats israeli arabs home addresses robinhood banking babies k everyone trading bloomberg l p

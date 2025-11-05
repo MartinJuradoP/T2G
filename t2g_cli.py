@@ -246,6 +246,50 @@ def cmd_mentions(args: argparse.Namespace) -> None:
     extract_mentions(args.chunks_glob, args.schema_dir, cfg)
 
 # ============================================================================
+# GRAPH BUILDER
+# ============================================================================
+# ============================================================================
+# GRAPH BUILDER
+# ============================================================================
+def cmd_graph_builder(args: argparse.Namespace) -> None:
+    """
+    Ejecuta la etapa final de construcción del grafo en Neo4j.
+    - Entrada: outputs_ir + outputs_mentions
+    - Salida:  Nodos y relaciones en Neo4j + metrics en outputs_graph/
+    """
+    from graph_builder.graph_ingestor import ingest_graph
+    from pathlib import Path
+    import shutil
+
+    outdir = Path(getattr(args, "outdir", "outputs_graph"))
+    clean = getattr(args, "clean_outdir", False)
+
+    # 🧹 Limpieza opcional del directorio de salida
+    if clean and outdir.exists():
+        logger.info("[GRAPH-BUILDER] 🧹 Limpiando carpeta: %s", outdir)
+        for f in outdir.iterdir():
+            if f.is_file():
+                f.unlink()
+            elif f.is_dir():
+                shutil.rmtree(f)
+
+    outdir.mkdir(parents=True, exist_ok=True)
+
+    logger.info("[GRAPH-BUILDER] Iniciando ingesta hacia Neo4j...")
+
+    summary = ingest_graph(
+        ir_dir=args.ir_glob or "outputs_ir",
+        mentions_dir=args.mentions_glob or "outputs_mentions",
+        outdir=str(outdir),
+        neo4j_uri=getattr(args, "neo4j_uri", None),
+        neo4j_user=getattr(args, "neo4j_user", None),
+        neo4j_password=getattr(args, "neo4j_password", None),
+        continue_on_error=getattr(args, "continue_on_error", True),
+    )
+
+    logger.info("[GRAPH-BUILDER] Finalizado: %s", summary)
+
+# ============================================================================
 # Pipeline YAML
 # ============================================================================
 def cmd_pipeline_yaml(args: argparse.Namespace) -> None:
@@ -364,6 +408,19 @@ def cmd_pipeline_yaml(args: argparse.Namespace) -> None:
             )
             cmd_mentions(ns)
 
+        elif name == "graph-builder":
+            ns = argparse.Namespace(
+                ir_glob=sargs.get("ir_glob", "outputs_ir"),
+                mentions_glob=sargs.get("mentions_glob", "outputs_mentions"),
+                outdir=sargs.get("outdir", "outputs_graph"),
+                neo4j_uri=sargs.get("neo4j_uri", None),
+                neo4j_user=sargs.get("neo4j_user", None),
+                neo4j_password=sargs.get("neo4j_password", None),
+                continue_on_error=sargs.get("continue_on_error", True),
+            )
+            cmd_graph_builder(ns)
+
+
 
 
 
@@ -480,6 +537,19 @@ def build_t2g_cli() -> argparse.ArgumentParser:
     mn.add_argument("--max-tokens", type=int, default=4096)
     mn.add_argument("--confidence-threshold", type=float, default=0.25)
     mn.set_defaults(func=cmd_mentions)
+
+    # graph-builder
+    gb = cmds.add_parser("graph-builder", help="Construye el grafo de conocimiento en Neo4j")
+    gb.add_argument("--ir-glob", default="outputs_ir")
+    gb.add_argument("--mentions-glob", default="outputs_mentions")
+    gb.add_argument("--outdir", default="outputs_graph")
+    gb.add_argument("--neo4j-uri", default=None, help="URI del servidor Neo4j (p.ej. bolt://localhost:7687)")
+    gb.add_argument("--neo4j-user", default=None, help="Usuario Neo4j")
+    gb.add_argument("--neo4j-password", default=None, help="Contraseña Neo4j o variable de entorno NEO4J_PASSWORD")
+    gb.add_argument("--continue-on-error", action="store_true", default=True)
+    gb.add_argument("--clean-outdir", action="store_true", help="Limpia el directorio de salida antes de la ejecución")
+    gb.set_defaults(func=cmd_graph_builder)
+
 
 
     # pipeline-yaml

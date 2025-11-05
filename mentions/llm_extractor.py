@@ -233,7 +233,7 @@ def extract_mentions(chunks_glob: str, schema_dir: str, cfg: MentionsConfig) -> 
                     m["confidence"] = float(m.get("confidence", 0.85))
                 all_mentions.extend(mentions_local)
 
-                print(f"[MENTIONS] ✅ Batch {batch_id} procesado ({len(mentions_local)} menciones)")
+                print(f"[MENTIONS]  Batch {batch_id} procesado ({len(mentions_local)} menciones)")
 
             # ======================================================
             # 🧹 Consolidación global
