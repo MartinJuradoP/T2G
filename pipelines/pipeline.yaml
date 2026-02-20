@@ -57,7 +57,7 @@ stages:
       clean_outdir: true
       ir_glob: "outputs_doc_topics/*.json"
       outdir: "outputs_chunks"
-      max_tokens: 2048
+      max_tokens: 1024
       min_chars: 280
       use_embeddings: true
       embedding_model: "all-MiniLM-L6-v2"
@@ -127,7 +127,7 @@ stages:
       clean_outdir: true
       llm_model: "gpt-4o-mini"
       temperature: 0.1
-      max_tokens: 2048          # subir para ventanas grandes
+      max_tokens: 1024          # subir para ventanas grandes
       confidence_threshold: 0.10 # bajar un poco para no perder menciones borderline
   # ─────────────────────────────────────────────────────────────
   # 7 Graph Builder — Ne4j integración de entidades y relaciones

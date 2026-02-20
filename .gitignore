@@ -144,9 +144,16 @@ docs/**
 !docs/.gitkeep
 !docs/samples/**
 
-#Neo4j data
-# Neo4j runtime
-neo4j/data/
-neo4j/logs/
-neo4j/import/*.csv
-neo4j/import/*.json
+# Ignorar todo lo generado dentro de docker/
+neo4j/docker/data/
+neo4j/docker/logs/
+neo4j/docker/import/
+neo4j/docker/plugins/
+neo4j/docker/transactions/
+
+# Mantener configuración y compose
+!neo4j/conf/
+!neo4j/conf/neo4j.conf
+!neo4j/docker/docker-compose.neo4j.yml
+!neo4j/docker/plugins/apoc.jar
+

@@ -337,7 +337,7 @@ def _merge_lines_layout_aware(page: pdfplumber.page.Page, lines: List[str]) -> T
     try:
         _ = page.extract_words(x_tolerance=1, y_tolerance=1, keep_blank_chars=False) or []
     except Exception:
-        pass
+        pass  # fallback silently to textual merge
     return _merge_lines_textual(lines)
 
 # ---------------------------------------------------------------------
@@ -416,11 +416,11 @@ class Parser:
         mime = _guess_mime(path)
         logger.info("Parsing start | path=%s mime=%s", path, mime)
 
-        meta: Dict[str, Any] = {"filename": os.path.basename(path)}
-        try:
-            meta["size_bytes"] = os.stat(path).st_size
-        except Exception:
-            pass
+    meta: Dict[str, Any] = {"filename": os.path.basename(path)}
+    try:
+        meta["size_bytes"] = os.stat(path).st_size
+    except Exception:
+        pass  # non-critical metadata; keep parsing
         try:
             meta["sha256"] = _sha256(path)
         except Exception as e:
@@ -603,13 +603,13 @@ class Parser:
                                 pil_img, lang=self.ocr_lang, output_type=pytesseract.Output.DICT
                             )
                             words, confs = [], []
-                            for w, conf in zip(data.get("text", []), data.get("conf", [])):
-                                if not w: continue
-                                words.append(w)
-                                try:
-                                    confs.append(float(conf))
-                                except Exception:
-                                    pass
+            for w, conf in zip(data.get("text", []), data.get("conf", [])):
+                if not w: continue
+                words.append(w)
+                try:
+                    confs.append(float(conf))
+                except Exception:
+                    pass  # ignore OCR confidence parsing issues
                             ocr_text = self._normalize_text(" ".join(words))
                             mean_conf = (sum(confs) / len(confs) / 100.0) if confs else None
 
@@ -737,7 +737,7 @@ class Parser:
                 try:
                     confs.append(float(conf))
                 except Exception:
-                    pass
+                    pass  # ignore OCR confidence parsing issues
             text_raw_doc = self._normalize_text(" ".join(words))
             mean_conf = (sum(confs) / len(confs) / 100.0) if confs else None
         except Exception:

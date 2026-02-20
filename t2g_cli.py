@@ -4,14 +4,15 @@
 t2g_cli.py — CLI unificado del proyecto T2G
 ===========================================
 
-Etapas implementadas hoy:
+Etapas implementadas hoy (todas operativas):
 - parse              Parser (PDF/DOCX/IMG) → DocumentIR(.json)
 - contextize-doc     Añade contexto global al IR
 - chunk              Segmenta IR+Topics en DocumentChunks (heredando contexto)
+- contextize-chunks  Añade contexto local a chunks (híbrido o light)
+- schema-select      Selector de dominios/esquemas
+- mentions           Extracción LLM schema-aware
+- graph-builder      Export a Neo4j
 - pipeline-yaml      Ejecuta pipeline declarativo en YAML
-
-Etapas preparadas (stub, no implementadas aún):
-- contextize-chunks  Añade contexto local a chunks
 """
 
 from __future__ import annotations

@@ -12,6 +12,10 @@ pandas>=2.2,<2.3
 PyYAML>=6.0.1,<7
 matplotlib>=3.8,<3.10
 
+# --- Dataset/PDF generation utilities (benchmarks)
+datasets>=2.19,<3
+reportlab>=4.1,<5
+
 # --- NLP ---
 spacy>=3.7,<3.8   ; python_version >= "3.8"
 
@@ -31,6 +35,8 @@ rapidfuzz>=3.6,<4
 umap-learn
 # -- Embeddings ---
 sentence-transformers>=2.6,<2.8
+# -- Clustering / métricas (DBSCAN, cosine) --
+scikit-learn>=1.4,<1.5
 # -- Topic Modeling ---
 # -- KeyBERT
 keybert>=0.8,<0.9

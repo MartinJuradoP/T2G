@@ -1,0 +1,108 @@
+{
+  "DOC-1753CAA8-EECC": {
+    "t2g_entities": [
+      "bank america corp",
+      "central banks",
+      "citigroup inc",
+      "dws group",
+      "federal reserve",
+      "gold",
+      "nvidia corp",
+      "ounce",
+      "silver",
+      "tesla inc",
+      "trump",
+      "ubs group ag",
+      "xi jinping"
+    ],
+    "spacy_entities": [],
+    "zshot_entities": [],
+    "zshot_relations": [],
+    "opennre_relations": []
+  },
+  "DOC-D2425F06-5414": {
+    "t2g_entities": [
+      "bank america corp",
+      "cboe volatility index",
+      "chinese president xi jinping",
+      "citigroup inc",
+      "gold",
+      "nasdaq",
+      "new york",
+      "nvidia corp",
+      "p m",
+      "per ounce",
+      "reuters",
+      "silver",
+      "south korea",
+      "tesla inc",
+      "tuesday",
+      "u president donald trump",
+      "ubs group ag"
+    ],
+    "spacy_entities": [],
+    "zshot_entities": [],
+    "zshot_relations": [],
+    "opennre_relations": []
+  },
+  "DOC-4B43DEFE-1F7E": {
+    "t2g_entities": [
+      "amazing",
+      "cooked food",
+      "restaurant",
+      "spicy tuna",
+      "sushi"
+    ],
+    "spacy_entities": [],
+    "zshot_entities": [],
+    "zshot_relations": [],
+    "opennre_relations": []
+  },
+  "DOC-89315DD0-7219": {
+    "t2g_entities": [
+      "atm card",
+      "baguettes",
+      "cash",
+      "credit cards",
+      "egg rolls",
+      "vietnamese sandwich shoppe"
+    ],
+    "spacy_entities": [],
+    "zshot_entities": [],
+    "zshot_relations": [],
+    "opennre_relations": []
+  },
+  "DOC-0D478638-41BF": {
+    "t2g_entities": [
+      "abstract",
+      "art display",
+      "atmosphere",
+      "burgers",
+      "chicken sandwich",
+      "dragon chicken wings",
+      "elsa",
+      "hot pepper chicken sandwich",
+      "totally cool"
+    ],
+    "spacy_entities": [],
+    "zshot_entities": [],
+    "zshot_relations": [],
+    "opennre_relations": []
+  },
+  "DOC-F2357F8F-C829": {
+    "t2g_entities": [
+      "buzzcation",
+      "five stars",
+      "fundraising",
+      "sidebar",
+      "sidebarphx",
+      "twitter",
+      "valley",
+      "year"
+    ],
+    "spacy_entities": [],
+    "zshot_entities": [],
+    "zshot_relations": [],
+    "opennre_relations": []
+  }
+}
